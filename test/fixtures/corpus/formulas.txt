@@ -1,0 +1,147 @@
+E=mc^2
+E = mc^2
+E = m c^{2}
+a^2+b^2=c^2
+x_i
+x_{i}
+x_{i,j}^{2}
+x_i^2
+\frac{a}{b}
+\frac{a+b}{c-d}
+\frac12
+\frac{1}{2}
+\dfrac{\partial f}{\partial x}
+\tfrac{1}{2}
+\sqrt{x}
+\sqrt[n]{x+1}
+\sqrt{x^2+y^2}
+\sum_{i=1}^{n} i = \frac{n(n+1)}{2}
+\sum_{i=1}^n a_i
+\sum\limits_{k=0}^{\infty} \frac{x^k}{k!}
+\prod_{p\text{ prime}} \frac{1}{1-p^{-s}}
+\int_0^1 f(x)\,dx
+\int_{0}^{\infty} e^{-x^2}\,\mathrm{d}x = \frac{\sqrt{\pi}}{2}
+\iint_D f(x,y)\,dA
+\oint_C \mathbf{F}\cdot d\mathbf{r}
+\lim_{x\to 0} \frac{\sin x}{x} = 1
+\lim_{n \to \infty} \left(1+\frac{1}{n}\right)^n = e
+\left( \frac{a}{b} \right)
+\left[ x \right]
+\left\{ x \in \mathbb{R} : x > 0 \right\}
+\left| x \right|
+\left\| x \right\|
+\|x\|
+\lvert x \rvert
+\langle x, y \rangle
+\left\langle \psi \middle| \phi \right\rangle
+f: \mathbb{R}^n \to \mathbb{R}
+f \colon X \rightarrow Y
+\forall \epsilon > 0, \exists \delta > 0
+x \in A \cup B
+A \subseteq B \iff A \cap B = A
+\mathbb{N} \subset \mathbb{Z} \subset \mathbb{Q}
+\mathcal{L}(\theta) = \prod_{i} p(x_i \mid \theta)
+\hat{\theta} = \arg\max_\theta \log p(x \mid \theta)
+\operatorname{tr}(A)
+\operatorname*{argmin}_{x} f(x)
+\det(A - \lambda I) = 0
+\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}
+\nabla \times \mathbf{B} = \mu_0 \mathbf{J} + \mu_0\varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+\frac{\partial^2 u}{\partial t^2} = c^2 \nabla^2 u
+i\hbar \frac{\partial}{\partial t}\Psi = \hat{H}\Psi
+\vec{v} = \dot{\vec{x}}
+\bar{x} = \frac{1}{n}\sum_{i=1}^n x_i
+\overline{z}
+\widehat{f}(\xi)
+\tilde{x}
+\ddot{x} + \omega^2 x = 0
+x'
+f''(x)
+f^{\prime}(x)
+\binom{n}{k}
+{n \choose k}
+\begin{pmatrix} a & b \\ c & d \end{pmatrix}
+\begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix}
+\begin{vmatrix} a & b \\ c & d \end{vmatrix}
+\begin{matrix} x & y \end{matrix}
+\begin{cases} x & x \geq 0 \\ -x & x < 0 \end{cases}
+f(x) = \begin{cases} 1, & \text{if } x > 0, \\ 0, & \text{otherwise.} \end{cases}
+\begin{aligned} a &= b + c \\ &= d \end{aligned}
+\begin{array}{cc} 1 & 2 \\ 3 & 4 \end{array}
+\text{for all } x
+x \quad\text{and}\quad y
+a\,b\;c\:d\!e
+a \cdot b \times c \div d
+a \le b \ge c \ne d
+a \leq b \geq c \neq d
+a \approx b \sim c \simeq d \equiv e \propto f
+a \pm b \mp c
+\alpha\beta\gamma\delta\epsilon\zeta\eta\theta
+\Gamma\Delta\Theta\Lambda\Xi\Pi\Sigma\Phi\Psi\Omega
+\varphi \varepsilon \vartheta
+1, 2, \ldots, n
+a_1 + \cdots + a_n
+\vdots \quad \ddots
+P(A \mid B) = \frac{P(B \mid A) P(A)}{P(B)}
+\mathbb{E}[X] = \sum_x x\, p(x)
+\operatorname{Var}(X) = \mathbb{E}[X^2] - \mathbb{E}[X]^2
+\mathrm{Pr}\left[ X \geq t \right] \leq \frac{\mathbb{E}[X]}{t}
+X \sim \mathcal{N}(\mu, \sigma^2)
+\log_2 n
+\ln x
+\exp(-x)
+\sin^2 \theta + \cos^2 \theta = 1
+\tan\theta = \frac{\sin\theta}{\cos\theta}
+a \equiv b \pmod{n}
+a \bmod n
+\gcd(a, b)
+\lfloor x \rfloor + \lceil y \rceil
+\underbrace{1+1+\cdots+1}_{n}
+\overbrace{a+b}^{k}
+\overset{!}{=}
+\stackrel{\text{def}}{=}
+x \xrightarrow{f} y
+A \Rightarrow B \Leftrightarrow C
+\mapsto
+\boldsymbol{\alpha}
+\mathbf{x}^\top \mathbf{y}
+A^{-1}
+A^T
+\mathrm{d}x
+\displaystyle\sum_{n=1}^\infty \frac{1}{n^2} = \frac{\pi^2}{6}
+e^{i\pi} + 1 = 0
+\{ x \mid x > 0 \}
+\emptyset
+\aleph_0
+\partial_\mu A^\mu
+g_{\mu\nu} dx^\mu dx^\nu
+\Big( x \Big)
+\bigl( x \bigr)
+\left. \frac{df}{dx} \right|_{x=0}
+\color{red} x
+\textbf{bold}
+\mathit{abc}
+\mathsf{T}
+\mathtt{code}
+\mathfrak{g}
+\phantom{x}
+\hspace{1em}
+x \qquad y
+\not\in
+\notin
+\neg p \land q \lor r
+\top \bot
+\infty
+-\infty < x < +\infty
+10^{-3}
+3.14159
+1{,}000
+\% \$ \&
+\star \ast \circ \bullet
+\oplus \otimes
+\leftarrow \longrightarrow
+\cong
+\perp \parallel
+\angle ABC
+\triangle ABC
+45^\circ

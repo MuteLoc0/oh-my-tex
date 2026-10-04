@@ -1,0 +1,15 @@
+node_modules
+dist
+out
+.vscode-test/
+.vscode/
+*.vsix
+test-results/
+playwright-report/
+examples/**/*.aux
+examples/**/*.fdb_latexmk
+examples/**/*.fls
+examples/**/*.log
+examples/**/*.pdf
+examples/**/*.synctex.gz
+.DS_Store

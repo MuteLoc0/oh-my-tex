@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-omt-test' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'">
+<link rel="stylesheet" href="../../dist/webview.css">
+<style>
+  :root { --vscode-editor-foreground: #bfbdb6; --vscode-editor-background: #0d1017; --vscode-editorCursor-foreground: #e6b450;
+    --vscode-editor-selectionBackground: #409fff4d; --vscode-editorLineNumber-foreground: #6c7380; --vscode-focusBorder: #e6b450; }
+</style>
+</head><body class="vscode-dark" data-fonts="../../dist/fonts" data-onig-wasm="../../dist/onig.wasm"><div id="editor"></div>
+<script nonce="omt-test">
+  window.__posted = [];
+  window.acquireVsCodeApi = () => ({ postMessage: m => { window.__posted.push(m); window.__toHost && window.__toHost(m); }, getState: () => undefined, setState: () => {} });
+</script>
+<script nonce="omt-test" src="../../dist/webview.js"></script></body></html>

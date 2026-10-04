@@ -1,0 +1,9 @@
+**
+!dist/**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+!images/icon.png
+dist/test/**
+**/*.map

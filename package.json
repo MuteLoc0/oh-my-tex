@@ -1,0 +1,237 @@
+{
+  "name": "oh-my-tex",
+  "displayName": "Oh My TeX",
+  "description": "Edit LaTeX prose and formulas on one page: formulas become in-place visual math fields, the .tex source stays authoritative.",
+  "version": "0.1.0",
+  "publisher": "MuteLoc0",
+  "icon": "images/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MuteLoc0/oh-my-tex.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "latex",
+    "math",
+    "mathlive",
+    "visual-editor"
+  ],
+  "activationEvents": [
+    "onLanguage:latex"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "oh-my-tex.visual",
+        "displayName": "Oh My TeX",
+        "selector": [
+          {
+            "filenamePattern": "*.tex"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "oh-my-tex.toggleVisual",
+        "title": "Oh My TeX: Open Visual Editor / Toggle Source Mode"
+      },
+      {
+        "command": "oh-my-tex.openSource",
+        "title": "Oh My TeX: Open Native Source at Cursor"
+      },
+      {
+        "command": "oh-my-tex.synctex",
+        "title": "Oh My TeX: SyncTeX from Cursor"
+      },
+      {
+        "command": "oh-my-tex.build",
+        "title": "Oh My TeX: Build with LaTeX Workshop"
+      },
+      {
+        "command": "oh-my-tex.chooseRoot",
+        "title": "Oh My TeX: Choose Root Document"
+      },
+      {
+        "command": "oh-my-tex.view",
+        "title": "Oh My TeX: View PDF with LaTeX Workshop"
+      },
+      {
+        "command": "oh-my-tex.syncRoot",
+        "title": "Oh My TeX: Sync Workshop Root and View PDF"
+      },
+      {
+        "command": "oh-my-tex.find",
+        "title": "Oh My TeX: Find in Visual Editor"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "oh-my-tex.toggleVisual",
+        "key": "ctrl+alt+shift+m",
+        "mac": "cmd+alt+shift+m",
+        "when": "resourceExtname == .tex && (editorTextFocus || activeCustomEditorId == oh-my-tex.visual)"
+      },
+      {
+        "command": "oh-my-tex.synctex",
+        "key": "ctrl+alt+j",
+        "mac": "cmd+alt+j",
+        "when": "activeCustomEditorId == oh-my-tex.visual"
+      },
+      {
+        "command": "oh-my-tex.build",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "activeCustomEditorId == oh-my-tex.visual"
+      },
+      {
+        "command": "oh-my-tex.view",
+        "key": "ctrl+alt+v",
+        "mac": "cmd+alt+v",
+        "when": "activeCustomEditorId == oh-my-tex.visual"
+      },
+      {
+        "command": "oh-my-tex.find",
+        "key": "ctrl+f",
+        "mac": "cmd+f",
+        "when": "activeCustomEditorId == oh-my-tex.visual"
+      }
+    ],
+    "configuration": {
+      "title": "Oh My TeX",
+      "properties": {
+        "oh-my-tex.completion.acceptOnEnter": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Accept completion candidates with Enter in prose and formulas. When disabled, Tab accepts candidates and Enter keeps its normal editor behavior."
+        },
+        "oh-my-tex.macros": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Extra math macros, e.g. `{ \"\\\\R\": \"\\\\mathbb{R}\", \"\\\\norm\": { \"args\": 1, \"def\": \"\\\\left\\\\lVert#1\\\\right\\\\rVert\" } }`. Project `\\newcommand`s are discovered automatically."
+        },
+        "oh-my-tex.renderMacros": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Display-only math macro overrides, using the same format as `oh-my-tex.macros`, e.g. `{ \"\\\\slashed\": { \"args\": 1, \"def\": \"\\\\cancel{#1}\" } }`. These take priority over project macros, compatibility macros and MathLive commands. They do not add completion items or change LaTeX source."
+        },
+        "oh-my-tex.templates": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Formula templates offered by completion. Each item: `{ \"prefix\": \"\\\\sumn\", \"label\": \"sum over n\", \"body\": \"\\\\sum_{${1:n=1}}^{${2:N}} $0\", \"context\": \"math\" }`. Body uses VS Code snippet syntax.",
+          "items": {
+            "type": "object",
+            "required": [
+              "prefix",
+              "body"
+            ],
+            "properties": {
+              "prefix": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "context": {
+                "type": "string",
+                "enum": [
+                  "math",
+                  "prose",
+                  "both"
+                ],
+                "default": "math"
+              }
+            }
+          }
+        },
+        "oh-my-tex.math.inlineShortcuts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable a small set of symbolic inline shortcuts (<=, >=, !=, ->). Configure additional shortcuts with math.inlineShortcutOverrides."
+        },
+        "oh-my-tex.math.inlineShortcutOverrides": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Add or override inline math shortcuts, e.g. `{ \"alpha\": \"\\\\alpha\" }`. An empty value disables a default shortcut. Applied when `math.inlineShortcuts` is enabled."
+        },
+        "oh-my-tex.math.completionAllowPatterns": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "JavaScript regular-expression sources for additional formula completions. Patterns match the label, filter text or inserted LaTeX. Invalid patterns are ignored. MathLive commands, project macros and math templates are always included."
+        },
+        "oh-my-tex.workshop.nativeEditorColumn": {
+          "type": "string",
+          "enum": [
+            "same",
+            "beside"
+          ],
+          "default": "beside",
+          "description": "Where the native source editor opens when bridging to LaTeX Workshop (SyncTeX, root detection)."
+        },
+        "oh-my-tex.workshop.returnToVisualEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Return focus to the visual editor after forward SyncTeX. Disable to keep the native source editor active."
+        },
+        "oh-my-tex.workshop.primeRoot": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Activate the project root in a native editor before Workshop actions. Workshop has no silent public root-refresh API; use Sync Workshop Root and View PDF for an explicit refresh. A % !TeX root comment is recommended for multi-root workspaces."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npm run check-types && node esbuild.mjs --production",
+    "check-types": "tsc -p tsconfig.core.json && tsc -p tsconfig.host.json && tsc -p tsconfig.webview.json",
+    "test:unit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"test/unit/**/*.test.ts\"",
+    "test:browser": "npm run build && playwright test",
+    "test": "npm run build && node esbuild.mjs --tests && vscode-test",
+    "vsix": "vsce package --no-dependencies",
+    "vscode:prepublish": "npm run package"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.4",
+    "@codemirror/search": "^6.5.11",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
+    "@lezer/highlight": "^1.2.5",
+    "jsonc-parser": "^3.3.1",
+    "mathlive": "0.110.0",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "@types/vscode": "1.100.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,101 @@
+html, body { height: 100%; margin: 0; padding: 0; }
+body { background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); overflow: hidden;
+  font-family: var(--omt-editor-font-family, var(--vscode-editor-font-family, monospace)); }
+#editor { height: 100vh; }
+
+/* Formulas */
+.omt-formula { cursor: text; border-radius: 3px; }
+.omt-formula:hover { background: var(--vscode-editor-hoverHighlightBackground, rgba(128, 128, 128, .12)); }
+.omt-inline { display: inline-block; vertical-align: baseline; padding: 0 1px; }
+.omt-display { display: block; text-align: center; padding: 4px 0; }
+.omt-empty::before { content: '\25A1'; opacity: .5; }
+.omt-error { color: var(--vscode-errorForeground); font-family: var(--omt-editor-font-family, var(--vscode-editor-font-family)); }
+.omt-live { background: var(--vscode-editor-selectionHighlightBackground, rgba(128, 128, 128, .15)); }
+.omt-live:focus-within { outline: 1px solid var(--vscode-focusBorder, currentColor); outline-offset: 1px; }
+
+math-field {
+  font-size: 1.05em;
+  border: none; outline: none; padding: 0; background: transparent;
+  color: var(--vscode-editor-foreground);
+  --caret-color: var(--vscode-editorCursor-foreground);
+  --selection-background-color: var(--vscode-editor-selectionBackground);
+  --selection-color: var(--vscode-editor-foreground);
+  --contains-highlight-background-color: transparent;
+  --placeholder-color: var(--vscode-descriptionForeground);
+  --primary: var(--vscode-focusBorder);
+  --smart-fence-color: var(--vscode-descriptionForeground);
+}
+.omt-inline math-field { display: inline-block; vertical-align: middle; }
+.omt-display math-field { display: block; width: 100%; }
+math-field::part(virtual-keyboard-toggle), math-field::part(menu-toggle) { display: none; }
+math-field::part(content) { padding: 0; }
+
+/* Prose completion and snippet navigation */
+.omt-completion { position: fixed; z-index: 100; max-height: 280px; overflow: auto; padding: 3px 0;
+  box-sizing: border-box; border: 1px solid var(--vscode-editorSuggestWidget-border, #555);
+  border-radius: 4px; background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
+  color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-editor-foreground));
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .25); font: var(--omt-editor-font-size, 13px) var(--omt-editor-font-family, var(--vscode-editor-font-family, monospace)); }
+.omt-completion[hidden] { display: none; }
+.omt-completion-item { display: flex; gap: 16px; padding: 4px 8px; cursor: pointer; }
+.omt-completion-item[aria-selected="true"] { background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-editor-selectionBackground));
+  color: var(--vscode-editorSuggestWidget-selectedForeground, inherit); }
+.omt-completion-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.omt-completion-detail { max-width: 45%; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.omt-snippet-stop { outline: 1px solid var(--vscode-editor-snippetTabstopHighlightBorder, #777); }
+.omt-snippet-active { background: var(--vscode-editor-snippetTabstopHighlightBackground, var(--vscode-editor-selectionBackground)); }
+
+.omt-math-buffer { position: fixed; z-index: 101; padding: 3px 7px; border: 1px solid var(--vscode-focusBorder, #007acc); border-radius: 4px; background: var(--vscode-input-background, #fff); box-shadow: 0 2px 8px #0003; }
+.omt-math-buffer input { min-width: 5ch; max-width: 22ch; color: var(--vscode-input-foreground, inherit); background: transparent; border: none; outline: none; font: inherit; font-family: var(--omt-editor-font-family, var(--vscode-editor-font-family, monospace)); }
+
+.omt-macro-tools, .omt-macro-args { position: fixed; z-index: 90; box-sizing: border-box;
+  border: 1px solid var(--vscode-editorSuggestWidget-border, #555); border-radius: 4px;
+  color: var(--vscode-editor-foreground); background: var(--vscode-editor-background);
+  box-shadow: 0 3px 12px #0003; font: var(--omt-editor-font-size, 12px) var(--omt-editor-font-family, var(--vscode-editor-font-family, monospace)); }
+.omt-macro-tools { display: flex; gap: 4px; padding: 3px; max-width: calc(100vw - 8px); overflow: auto; }
+.omt-macro-tools[hidden] { display: none; }
+.omt-macro-args { min-width: 280px; max-width: min(560px, calc(100vw - 8px)); max-height: calc(100vh - 8px); overflow: auto; padding: 8px; }
+.omt-macro-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.omt-macro-header strong { flex: 1; }
+.omt-macro-args button, .omt-macro-tools button { cursor: pointer; border: 1px solid transparent; border-radius: 3px;
+  padding: 3px 6px; font: inherit; background: var(--vscode-button-secondaryBackground, #5553); color: inherit; }
+.omt-macro-args button:hover, .omt-macro-tools button:hover { background: var(--vscode-button-secondaryHoverBackground, #7774); }
+.omt-macro-args button:focus-visible, .omt-macro-tools button:focus-visible { outline: 1px solid var(--vscode-focusBorder, currentColor); }
+.omt-macro-arg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 0; }
+.omt-macro-arg label { opacity: .75; }
+.omt-arg-field { flex: 1; min-width: 50px; padding: 4px; border: 1px solid var(--vscode-input-border, #777); border-radius: 3px; }
+.omt-arg-field math-field { display: block; min-width: 45px; font-size: 1.05em; }
+.omt-nested-macros { display: flex; gap: 4px; }
+
+/* CodeMirror's search UI uses the same editor-widget, input and button colors as VS Code. */
+.cm-editor .cm-panels { border-color: var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent)); }
+.cm-editor .cm-search { padding-right: 24px; font-family: var(--omt-editor-font-family, monospace); }
+.cm-editor .cm-search .cm-textfield { max-width: min(260px, 45vw); box-sizing: border-box;
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border, transparent)); border-radius: 2px;
+  background: var(--vscode-input-background, var(--vscode-editor-background)); color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+  padding: 3px 5px; font: inherit; }
+.cm-editor .cm-search .cm-textfield::placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
+.cm-editor .cm-search .cm-button { background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground, var(--vscode-editor-foreground)));
+  border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; padding: 3px 7px; font: inherit; cursor: pointer; }
+.cm-editor .cm-search .cm-button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground)); }
+.cm-editor .cm-search input[type=checkbox] { accent-color: var(--vscode-focusBorder); }
+.cm-editor .cm-search [name=close] { color: inherit; cursor: pointer; }
+.cm-editor .cm-search :focus-visible { outline: 1px solid var(--vscode-focusBorder, currentColor); outline-offset: 1px; }
+.cm-editor .cm-searchMatch { outline: 1px solid var(--vscode-editor-findMatchHighlightBorder, transparent); }
+.cm-editor .cm-searchMatch-selected { outline-color: var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder, currentColor)); }
+
+/* High contrast themes provide borders even when selection/highlight backgrounds are transparent. */
+body:is(.vscode-high-contrast, .vscode-high-contrast-light, [data-omt-theme=hcDark], [data-omt-theme=hcLight]) {
+  --omt-contrast-border: var(--vscode-contrastBorder, var(--vscode-focusBorder, currentColor));
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light, [data-omt-theme=hcDark], [data-omt-theme=hcLight])
+  :is(.omt-formula, .omt-completion, .omt-macro-tools, .omt-macro-args, .omt-arg-field, .cm-panels, .cm-search .cm-textfield, .cm-search .cm-button) {
+  border: 1px solid var(--omt-contrast-border); box-shadow: none;
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light, [data-omt-theme=hcDark], [data-omt-theme=hcLight])
+  :is(.omt-live, .omt-completion-item[aria-selected=true], .cm-searchMatch, .cm-selectionBackground) {
+  outline: 1px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder, currentColor));
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light, [data-omt-theme=hcDark], [data-omt-theme=hcLight])
+  :is(.omt-completion-detail, .omt-macro-arg label) { opacity: 1; }
