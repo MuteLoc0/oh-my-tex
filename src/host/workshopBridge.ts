@@ -3,11 +3,29 @@ import { SerialQueue } from '../core/serial.ts';
 import { log } from './log.ts';
 
 const WORKSHOP = 'James-Yu.latex-workshop';
+type WorkshopExtension = Pick<vscode.Extension<unknown>, 'activate'>;
 
 /** Workshop 10.19 captures activeTextEditor synchronously for SyncTeX and build.
  * Its public API exposes no silent root refresh, so priming activates the root's
  * native editor; an explicit syncRoot uses view(), which awaits root.find(). */
 export class WorkshopBridge {
+  private remoteAvailable = false;
+  private readonly resolve: () => WorkshopExtension | undefined;
+  private readonly commands: () => Thenable<string[]>;
+
+  constructor(
+    resolve: () => WorkshopExtension | undefined = () => vscode.extensions.getExtension(WORKSHOP),
+    commands: () => Thenable<string[]> = () => vscode.commands.getCommands(true),
+  ) { this.resolve = resolve; this.commands = commands; }
+
+  /** Public commands remain visible/routable across UI and workspace hosts. */
+  async refreshAvailability(): Promise<void> {
+    try { this.remoteAvailable = (await this.commands()).includes('latex-workshop.build'); }
+    catch (error) {
+      this.remoteAvailable = false;
+      log().warn(`Workshop command discovery failed: ${String(error)}`);
+    }
+  }
   private queue = new SerialQueue();
   private positioningDepth = 0;
   private focusDepth = 0;
@@ -16,7 +34,7 @@ export class WorkshopBridge {
   private building = false;
 
   get positioning() { return this.positioningDepth > 0; }
-  get available() { return !!vscode.extensions.getExtension(WORKSHOP); }
+  get available() { return !!this.resolve() || this.remoteAvailable; }
   isSaving(document: vscode.TextDocument) { return this.building || this.saving.has(document.uri.toString()); }
   hasFlushedSave(document: vscode.TextDocument) { return this.saving.has(document.uri.toString()); }
 
@@ -177,9 +195,13 @@ export class WorkshopBridge {
   private restore(panel: vscode.WebviewPanel) { try { panel.reveal(panel.viewColumn, false); } catch { /* Panel was closed while a command ran. */ } }
 
   private async activate(): Promise<boolean> {
-    const extension = vscode.extensions.getExtension(WORKSHOP);
-    if (!extension) { void vscode.window.showInformationMessage('Oh My TeX: this needs the LaTeX Workshop extension.'); return false; }
-    await extension.activate();
-    return true;
+    const extension = this.resolve();
+    if (extension) { await extension.activate(); return true; }
+    await this.refreshAvailability();
+    // executeCommand activates the remote provider before dispatching its
+    // contributed command. Never access exports across extension hosts.
+    if (this.remoteAvailable) { return true; }
+    void vscode.window.showInformationMessage('Oh My TeX: install and enable LaTeX Workshop in this workspace (on the SSH host for remote files).');
+    return false;
   }
 }

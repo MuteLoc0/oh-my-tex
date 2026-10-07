@@ -237,6 +237,7 @@ onHostMessage((message: HostMessage) => {
       }
       break;
     case 'completions': completion.receive(message); mathCompletion.receive(message); break;
+    case 'completionResolved': completion.receiveResolved(message); mathCompletion.receiveResolved(message); break;
     case 'docChanged': sync.docChanged(message.version, message.changes, message.originTxn); reportSelection(); break;
     case 'txnResult': sync.txnResult(message.txn, message.ok, message.reason); break;
     case 'reset': pendingReveal = undefined; mathCompletion.cancel(false); sync.reset(message.version, message.text); break;

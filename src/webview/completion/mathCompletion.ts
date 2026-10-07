@@ -10,6 +10,7 @@ import { editKind } from '../editor/annotations.ts';
 import { replayMathInput, type BufferedMathInput } from '../formula/mathlive.ts';
 import type { SyncClient } from '../sync.ts';
 import { CompletionPopup } from './popup.ts';
+import { CompletionResolver } from './resolve.ts';
 
 type Trigger = Extract<WebMessage, { t: 'complete' }>['trigger'];
 /** A formula keeps its original MathLive selection while source contains the temporary prefix. */
@@ -52,14 +53,16 @@ export class MathCompletion {
   private focusSettled?: Promise<void>;
   private sync: SyncClient;
   private post: (message: WebMessage) => void;
+  private readonly resolver: CompletionResolver;
 
   constructor(sync: SyncClient, post: (message: WebMessage) => void) {
-    this.sync = sync; this.post = post;
+    this.sync = sync; this.post = post; this.resolver = new CompletionResolver(sync, post);
     this.chip.className = 'omt-math-buffer'; this.chip.append(this.input);
     this.input.type = 'text'; this.input.setAttribute('aria-label', 'Math command completion');
     this.input.autocomplete = 'off'; this.input.spellcheck = false;
     this.input.addEventListener('input', event => {
       if (!this.target) { return; }
+      this.resolver.cancel();
       // Completion is a command buffer; composition commits before querying providers.
       this.editing = true;
       try { this.range = this.target.buffer(this.input.value); } finally { this.editing = false; }
@@ -68,10 +71,12 @@ export class MathCompletion {
       if (this.requestState?.incomplete) { this.schedule({ kind: 'incomplete' }); }
       else if (!this.requestState) { this.schedule({ kind: 'invoke' }); }
     });
-    this.input.addEventListener('compositionstart', () => { this.composing = true; clearTimeout(this.timer); });
+    this.input.addEventListener('select', () => this.resolver.cancel());
+    this.input.addEventListener('compositionstart', () => { this.resolver.cancel(); this.composing = true; clearTimeout(this.timer); });
     this.input.addEventListener('compositionend', () => { this.composing = false; this.schedule({ kind: 'invoke' }); });
     this.input.addEventListener('keydown', event => {
       if (event.isComposing) { return; }
+      if (event.key !== 'Enter' && event.key !== 'Tab') { this.resolver.cancel(); }
       let handled = true;
       if (event.key === 'Escape') { this.cancel(); }
       else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -94,7 +99,7 @@ export class MathCompletion {
     window.addEventListener('resize', () => this.render());
   }
   attach(view: EditorView) {
-    this.view = view; this.popup = new CompletionPopup(view, index => { this.selected = index; this.accept(); });
+    this.view = view; this.popup = new CompletionPopup(view, index => { this.resolver.cancel(); this.selected = index; this.accept(); });
     view.scrollDOM.addEventListener('scroll', () => this.render());
   }
   configure(settings: EditorSettings) { this.settings = settings; }
@@ -121,6 +126,7 @@ export class MathCompletion {
   }
   update(update: ViewUpdate) {
     if (!this.target || !update.docChanged) { return; }
+    this.resolver.cancel();
     if (this.editing) {
       const inverse = update.changes.invert(update.startState.doc);
       this.rollback = this.rollback ? inverse.compose(this.rollback) : inverse;
@@ -138,6 +144,8 @@ export class MathCompletion {
   }
   private async request(trigger: Trigger, retry = 0) {
     clearTimeout(this.timer);
+    this.resolver.cancel();
+    if (this.requestState) { this.post({ t: 'cancelCompletion', req: this.requestState.req }); }
     const generation = ++this.generation;
     this.requestState = undefined; this.listed = []; this.selected = 0; this.popup.hide();
     await this.sync.flush();
@@ -156,6 +164,7 @@ export class MathCompletion {
     request.items = message.items; request.incomplete = message.isIncomplete; this.filter();
     if (message.isIncomplete && !request.changes.empty) { this.schedule({ kind: 'incomplete' }); }
   }
+  receiveResolved(message: Extract<HostMessage, { t: 'completionResolved' }>) { this.resolver.receive(message); }
   private filter() {
     const request = this.requestState, target = this.target;
     if (!target || !request?.items) { return; }
@@ -194,8 +203,27 @@ export class MathCompletion {
   private accept() {
     const target = this.target, item = this.listed[this.selected], request = this.requestState;
     if (!target || !item || !request) { return; }
+    if (item.needsResolve) {
+      if (this.resolver.pending) { return; }
+      clearTimeout(this.timer);
+      const at = this.range.to, generation = this.generation, selectionStart = this.input.selectionStart, selectionEnd = this.input.selectionEnd;
+      this.resolver.start(request.req, item.i, this.view, at,
+        () => this.target === target && this.requestState === request && this.generation === generation && this.ownsFocus()
+          && !this.composing && this.range.to === at && this.listed[this.selected]?.i === item.i
+          && this.input.selectionStart === selectionStart && this.input.selectionEnd === selectionEnd,
+        (resolved, version) => {
+          if (!resolved || resolved.needsResolve || !isMathCompletion(resolved, target.macros, this.settings?.mathCompletionAllowPatterns)) {
+            this.post({ t: 'log', level: 'warn', message: 'Completion changed while resolving; choose it again.' });
+            void this.request({ kind: 'invoke' }); return;
+          }
+          this.requestState = { ...request, version, at, doc: this.view.state.doc, changes: ChangeSet.empty(this.view.state.doc.length), items: [resolved], incomplete: false };
+          this.listed = [resolved]; this.selected = 0; this.accept();
+        });
+      return;
+    }
     const from = this.settings?.suggestReplace ? item.range.repFrom : item.range.insFrom;
     const to = this.settings?.suggestReplace ? item.range.repTo : item.range.insTo;
+    if (from < this.range.from || to > this.range.to || from > to) { this.cancel(); return; }
     const body = this.input.value.slice(0, from - this.range.from) + item.insert.value + this.input.value.slice(to - this.range.from);
     const variables = { TM_SELECTED_TEXT: target.selectedLatex() };
     const template = item.insert.snippet ? snippetToMathTemplate(body, variables, `omt-${++counter}`) : { latex: body, firstPromptId: undefined };
@@ -354,6 +382,8 @@ export class MathCompletion {
     target.end(); if (focus) { target.focus(); }
   }
   private clear() {
+    this.resolver.cancel();
+    if (this.requestState) { this.post({ t: 'cancelCompletion', req: this.requestState.req }); }
     if (!this.replayingHandoff && !this.continuingHandoff) { this.stopHandoff?.(); }
     this.generation++; clearTimeout(this.timer); this.requestState = undefined; this.target = undefined;
     this.rollback = undefined; this.listed = []; this.selected = 0; this.popup.hide(); this.chip.remove();

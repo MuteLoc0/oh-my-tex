@@ -19,6 +19,7 @@ async function main() {
   await fs.mkdir('dist', { recursive: true });
   // Shared by math fields (fontsDirectory) and static markup (mathlive-fonts.css, url(fonts/...)).
   await fs.cp('node_modules/mathlive/fonts', 'dist/fonts', { recursive: true });
+  await fs.cp('resources/grammars', 'dist/grammars', { recursive: true });
   await fs.copyFile('node_modules/vscode-oniguruma/release/onig.wasm', 'dist/onig.wasm');
   await fs.mkdir('dist/licenses', { recursive: true });
   await Promise.all([

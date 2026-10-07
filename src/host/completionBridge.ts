@@ -1,35 +1,42 @@
 import * as vscode from 'vscode';
-import { parse } from 'jsonc-parser';
 import { LineIndex, toLF } from '../core/eol.ts';
 import { filterCompletions } from '../core/completionFilter.ts';
 import { filterMathCompletions } from '../core/mathCompletionFilter.ts';
 import type { CompletionItemDTO, WebMessage } from '../shared/protocol.ts';
 import type { Session } from './session.ts';
 import { log } from './log.ts';
+import { SnippetStore } from './snippetStore.ts';
 
 type CompleteRequest = Extract<WebMessage, { t: 'complete' }>;
-type Candidate = Omit<CompletionItemDTO, 'i'> & { hostCommand?: vscode.Command };
-interface Registry { sequence: number; disposed: boolean; seen: Set<string>; requests: Map<string, Map<number, vscode.Command>> }
+type ProviderItem = { index: number; identity: string; version: number; at: number; trigger: CompleteRequest['trigger']; resolution?: string; consumed?: boolean };
+type Candidate = Omit<CompletionItemDTO, 'i'> & { hostCommand?: vscode.Command; provider?: ProviderItem };
+interface Registry {
+  sequence: number; disposed: boolean; active?: string; seen: Set<string>;
+  requests: Map<string, Map<number, vscode.Command>>; providers: Map<string, Map<number, ProviderItem>>;
+}
 const LIMIT = 300;
 
 /** Query language providers, then fill gaps in editor snippets and document word suggestions. */
-export class CompletionBridge {
+export class CompletionBridge implements vscode.Disposable {
   private registries = new WeakMap<Session, Registry>();
-  private snippetDirectory?: vscode.Uri;
+  private readonly snippets: SnippetStore;
+  private readonly wordCache = new WeakMap<vscode.TextDocument, { version: number; words: string[] }>();
+  private disposed = false;
 
   constructor(globalStorageUri?: vscode.Uri) {
-    // User[/profiles/id]/globalStorage/publisher.extension, including custom user-data directories.
-    if (globalStorageUri) { this.snippetDirectory = vscode.Uri.joinPath(globalStorageUri, '..', '..', 'snippets'); }
+    this.snippets = new SnippetStore(globalStorageUri);
   }
 
   async complete(session: Session, request: CompleteRequest): Promise<void> {
+    if (this.disposed) { return; }
     let registry = this.registries.get(session);
-    if (!registry) { registry = { sequence: 0, disposed: false, seen: new Set(), requests: new Map() }; this.registries.set(session, registry); }
+    if (!registry) { registry = { sequence: 0, disposed: false, seen: new Set(), requests: new Map(), providers: new Map() }; this.registries.set(session, registry); }
     // Reusing a request must never replace capabilities associated with an earlier response.
     if (registry.seen.has(request.req) || registry.requests.has(request.req)) { return; }
     registry.seen.add(request.req);
     if (registry.seen.size > 512) { registry.seen.delete(registry.seen.values().next().value!); }
     const sequence = ++registry.sequence;
+    registry.active = request.req;
     const document = session.document, text = toLF(document.getText()), index = new LineIndex(text);
     const empty = (incomplete: boolean) => session.post({ t: 'completions', req: request.req, version: document.version, at: request.at, isIncomplete: incomplete, items: [] });
     if (request.version !== document.version) { await empty(true); return; }
@@ -40,18 +47,21 @@ export class CompletionBridge {
     const fallbackRange = { insFrom: wordFrom, insTo: request.at, repFrom: wordFrom, repTo: wordTo };
     const query = text.slice(wordFrom, request.at);
     const beforeSlash = wordFrom > 0 && text[wordFrom - 1] === '\\';
-    let provider: vscode.CompletionList | undefined;
-    try {
-      provider = await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', document.uri, position,
-        request.trigger.kind === 'char' ? request.trigger.char : undefined, LIMIT);
-    } catch (error) { log().warn(`completion provider failed: ${String(error)}`); }
-    const [context, snippets] = await Promise.all([session.completionContext(), this.snippets(document)]);
-    if (registry.disposed) { return; }
+    // List first; provider details are fetched only for the accepted item.
+    // Start independent remote work together rather than adding its round trips.
+    const [provider, context, snippets] = await Promise.all([
+      this.query(document, position, request.trigger, 0), session.completionContext(), this.snippets.get(document),
+    ]);
+    if (this.disposed || registry.disposed || registry.sequence !== sequence) { return; }
     if (document.version !== request.version || registry.sequence !== sequence) { await empty(true); return; }
     const candidates: Candidate[] = [];
-    for (const item of provider?.items ?? []) {
+    for (const [providerIndex, item] of (provider?.items ?? []).entries()) {
       const converted = convertItem(item, document, index, fallbackRange, position);
-      if (converted) { candidates.push(converted); }
+      if (converted) {
+        converted.needsResolve = true;
+        converted.provider = { index: providerIndex, identity: itemIdentity(converted), version: request.version, at: request.at, trigger: request.trigger };
+        candidates.push(converted);
+      }
     }
     for (const macro of context.macros) {
       const name = `\\${macro.name}`;
@@ -85,75 +95,96 @@ export class CompletionBridge {
     const contextual = request.ctx === 'math' ? filterMathCompletions(unique, context.macros, patterns) : unique;
     const filtered = filterCompletions(contextual, query, LIMIT + 1);
     const commands = new Map<number, vscode.Command>();
+    const providers = new Map<number, ProviderItem>();
     const items = filtered.slice(0, LIMIT).map((candidate, i): CompletionItemDTO => {
-      const { hostCommand, ...dto } = candidate;
+      const { hostCommand, provider: providerItem, ...dto } = candidate;
       if (hostCommand) { commands.set(i, hostCommand); }
+      if (providerItem) { providers.set(i, providerItem); }
       return { ...dto, i };
     });
     registry.requests.set(request.req, commands);
-    while (registry.requests.size > 8) { registry.requests.delete(registry.requests.keys().next().value!); }
+    registry.providers.set(request.req, providers);
+    while (registry.requests.size > 8) {
+      const expired = registry.requests.keys().next().value!;
+      registry.requests.delete(expired); registry.providers.delete(expired);
+    }
     await session.post({ t: 'completions', req: request.req, version: request.version, at: request.at,
       isIncomplete: !!provider?.isIncomplete || filtered.length > LIMIT, items });
   }
 
+  /** Public VS Code APIs cannot resolve a retained item. Re-query the confirmed
+   * document, match its immutable identity, then resolve through its raw index.
+   * Never apply an unresolved item or guess when multiple providers collide. */
+  async resolve(session: Session, request: Extract<WebMessage, { t: 'resolveCompletion' }>): Promise<void> {
+    const registry = this.registries.get(session), entry = registry?.providers.get(request.req)?.get(request.item);
+    const commands = registry?.requests.get(request.req), document = session.document;
+    let value: CompletionItemDTO | undefined;
+    if (entry) { entry.resolution = request.resolution; }
+    const current = () => !this.disposed && !!registry && !registry.disposed && registry.active === request.req
+      && !!entry && entry.resolution === request.resolution && !entry.consumed
+      && registry.requests.get(request.req) === commands && document.version === request.version;
+    try {
+      const text = toLF(document.getText());
+      if (entry && commands && current() && request.at <= text.length) {
+        const index = new LineIndex(text), p = index.positionAt(request.at), position = new vscode.Position(p.line, p.character);
+        const word = document.getWordRangeAtPosition(position) ?? new vscode.Range(position, position);
+        const range = { insFrom: index.offsetAt(word.start.line, word.start.character), insTo: request.at,
+          repFrom: index.offsetAt(word.start.line, word.start.character), repTo: index.offsetAt(word.end.line, word.end.character) };
+        const matches = (list: vscode.CompletionList | undefined) => (list?.items ?? []).flatMap((item, rawIndex) => {
+          const candidate = convertItem(item, document, index, range, position);
+          return candidate && itemIdentity(candidate) === entry.identity ? [{ candidate, rawIndex }] : [];
+        });
+        let rawIndex = entry.index;
+        const trigger: CompleteRequest['trigger'] = entry.version === request.version && entry.at === request.at ? entry.trigger : { kind: 'invoke' };
+        if (entry.version !== request.version || entry.at !== request.at) {
+          const preview = await this.query(document, position, trigger, 0);
+          if (!current()) { return; }
+          const found = matches(preview);
+          if (found.length !== 1) { return; }
+          rawIndex = found[0]!.rawIndex;
+        }
+        const resolved = await this.query(document, position, trigger, rawIndex + 1);
+        if (!current()) { return; }
+        const found = matches(resolved);
+        if (found.length === 1 && found[0]!.rawIndex <= rawIndex) {
+          const { hostCommand, provider: _provider, ...dto } = found[0]!.candidate;
+          commands.delete(request.item);
+          if (hostCommand) { commands.set(request.item, hostCommand); }
+          value = { ...dto, i: request.item };
+        }
+      }
+    } finally {
+      await session.post({ t: 'completionResolved', resolution: request.resolution, req: request.req, item: request.item, version: request.version, at: request.at, value });
+    }
+  }
+
+  cancel(session: Session, req: string): void {
+    const registry = this.registries.get(session);
+    if (registry?.active === req) { registry.sequence++; registry.active = undefined; }
+  }
+
+  private async query(document: vscode.TextDocument, position: vscode.Position, trigger: CompleteRequest['trigger'], resolveCount: number) {
+    try {
+      return await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', document.uri, position,
+        trigger.kind === 'char' ? trigger.char : undefined, resolveCount);
+    } catch (error) { log().warn(`completion provider failed: ${String(error)}`); return undefined; }
+  }
+
   async runCommand(session: Session, req: string, item: number): Promise<void> {
-    const commands = this.registries.get(session)?.requests.get(req), command = commands?.get(item);
+    const registry = this.registries.get(session), commands = registry?.requests.get(req), command = commands?.get(item);
     if (!command) { return; }
     commands!.delete(item);
+    const provider = registry?.providers.get(req)?.get(item);
+    if (provider) { provider.consumed = true; }
     try { await vscode.commands.executeCommand(command.command, ...(command.arguments ?? [])); }
     catch (error) { log().warn(`completion command failed: ${String(error)}`); }
   }
 
-  dispose(session: Session) {
+  dispose(session?: Session): void {
+    if (!session) { this.disposed = true; this.snippets.dispose(); return; }
     const registry = this.registries.get(session);
-    if (registry) { registry.disposed = true; registry.requests.clear(); }
+    if (registry) { registry.disposed = true; registry.requests.clear(); registry.providers.clear(); }
     this.registries.delete(session);
-  }
-
-  private async snippets(document: vscode.TextDocument): Promise<StoredSnippet[]> {
-    const editor = vscode.workspace.getConfiguration('editor', { uri: document.uri, languageId: document.languageId });
-    const placement = editor.get<string>('snippetSuggestions', 'inline');
-    if (placement === 'none') { return []; }
-    const files: vscode.Uri[] = [];
-    const directory = async (uri: vscode.Uri, user: boolean) => {
-      try {
-        for (const [name, type] of await vscode.workspace.fs.readDirectory(uri)) {
-          if (type !== vscode.FileType.File || (!name.endsWith('.code-snippets') && !(user && name === `${document.languageId}.json`))) { continue; }
-          files.push(vscode.Uri.joinPath(uri, name));
-        }
-      } catch { /* Snippet directories are optional. */ }
-    };
-    await Promise.all([
-      ...(this.snippetDirectory ? [directory(this.snippetDirectory, true)] : []),
-      ...(vscode.workspace.workspaceFolders ?? []).map(folder => directory(vscode.Uri.joinPath(folder.uri, '.vscode'), false)),
-    ]);
-    for (const extension of vscode.extensions.all) {
-      const contributions = extension.packageJSON.contributes?.snippets as { language?: string; path?: string }[] | undefined;
-      for (const snippet of contributions ?? []) {
-        if (snippet.language === document.languageId && typeof snippet.path === 'string') { files.push(vscode.Uri.joinPath(extension.extensionUri, snippet.path)); }
-      }
-    }
-    return (await Promise.all(files.map(async uri => {
-      try {
-        const data = parse(Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8')) as unknown;
-        if (!data || typeof data !== 'object' || Array.isArray(data)) { return []; }
-        const result: StoredSnippet[] = [];
-        for (const [name, raw] of Object.entries(data)) {
-          if (!raw || typeof raw !== 'object') { continue; }
-          const item = raw as Record<string, unknown>;
-          if (typeof item.scope === 'string' && !item.scope.split(',').map(s => s.trim()).includes(document.languageId)) { continue; }
-          const body = typeof item.body === 'string' ? item.body : Array.isArray(item.body) && item.body.every(l => typeof l === 'string') ? item.body.join('\n') : undefined;
-          const prefixes = typeof item.prefix === 'string' ? [item.prefix] : Array.isArray(item.prefix) ? item.prefix.filter(p => typeof p === 'string') as string[] : [];
-          if (body === undefined) { continue; }
-          for (const prefix of prefixes) {
-            if (!prefix) { continue; }
-            result.push({ name, prefix, body, description: typeof item.description === 'string' ? item.description : undefined,
-              sortText: `${placement === 'top' ? '0' : placement === 'bottom' ? 'z' : '1'}${prefix}` });
-          }
-        }
-        return result;
-      } catch { return []; }
-    }))).flat();
   }
 
   private words(document: vscode.TextDocument, text: string, query: string): string[] {
@@ -162,15 +193,25 @@ export class CompletionBridge {
     const documents = mode === 'currentDocument' ? [document] : vscode.workspace.textDocuments.filter(d => d === document || mode === 'allDocuments' || d.languageId === document.languageId);
     const words = new Set<string>();
     for (const doc of documents) {
-      for (const match of (doc === document ? text : toLF(doc.getText())).matchAll(/[\p{L}_][\p{L}\p{N}_-]+/gu)) {
-        if (match[0] !== query) { words.add(match[0]); }
+      let cached = this.wordCache.get(doc);
+      if (!cached || cached.version !== doc.version) {
+        const source = doc === document ? text : toLF(doc.getText());
+        cached = { version: doc.version, words: [...new Set([...source.matchAll(/[\p{L}_][\p{L}\p{N}_-]+/gu)].map(match => match[0]))] };
+        this.wordCache.set(doc, cached);
       }
+      for (const word of cached.words) { if (word !== query) { words.add(word); } }
     }
     return [...words];
   }
 }
 
-interface StoredSnippet { prefix: string; name: string; body: string; description?: string; sortText?: string }
+/** Resolution may add documentation, commands and extra edits, but cannot
+ * change the item's primary insertion/filter identity. Ranges are re-derived
+ * from the newly confirmed document when the prefix has changed. */
+function itemIdentity(item: Candidate): string {
+  return JSON.stringify([item.label, item.kind, item.filterText, item.sortText, item.insert]);
+}
+
 const escapeSnippet = (text: string) => text.replace(/[\\$}]/g, '\\$&');
 
 function convertItem(item: vscode.CompletionItem, document: vscode.TextDocument, index: LineIndex, fallback: CompletionItemDTO['range'], position: vscode.Position): Candidate | undefined {

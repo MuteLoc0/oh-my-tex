@@ -102,6 +102,8 @@ export class Session implements vscode.Disposable {
       case 'view': await this.view(); break;
       case 'syncRoot': await this.syncRoot(); break;
       case 'complete': await this.services.completion.complete(this, message); break;
+      case 'resolveCompletion': await this.services.completion.resolve(this, message); break;
+      case 'cancelCompletion': this.services.completion.cancel(this, message.req); break;
       case 'runItemCommand': await this.services.completion.runCommand(this, message.req, message.item); break;
       case 'log': log()[message.level](`[webview] ${message.message}`); break;
     }

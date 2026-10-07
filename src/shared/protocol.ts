@@ -10,6 +10,7 @@ export interface CompletionItemDTO {
   range: { insFrom: number; insTo: number; repFrom: number; repTo: number };
   extraEdits?: Change[];
   command?: 'triggerSuggest' | 'host';
+  needsResolve?: boolean;            // provider details must be resolved before accepting
   source?: 'provider' | 'macro' | 'template' | 'snippet' | 'word';
 }
 
@@ -20,6 +21,7 @@ export type HostMessage =
   | { t: 'txnResult'; txn: string; ok: boolean; reason?: string }
   | ({ t: 'context' } & ProjectContext)
   | { t: 'completions'; req: string; version: number; at: number; isIncomplete: boolean; items: CompletionItemDTO[] }
+  | { t: 'completionResolved'; resolution: string; req: string; item: number; version: number; at: number; value?: CompletionItemDTO }
   | { t: 'reveal'; anchor: number; head: number; focus: boolean; version?: number }
   | { t: 'settings'; settings: EditorSettings }
   | { t: 'command'; name: 'toggleSource' | 'flush' | 'find'; req?: string; stabilize?: boolean };
@@ -28,6 +30,8 @@ export type WebMessage =
   | { t: 'ready'; proto: number }
   | { t: 'edit'; txn: string; baseVersion: number; patches: Patch[]; kind: string }
   | { t: 'complete'; req: string; version: number; at: number; trigger: { kind: 'invoke' | 'char' | 'incomplete'; char?: string }; ctx: 'prose' | 'math' }
+  | { t: 'resolveCompletion'; resolution: string; req: string; item: number; version: number; at: number }
+  | { t: 'cancelCompletion'; req: string }
   | { t: 'runItemCommand'; req: string; item: number }
   | { t: 'selection'; version: number; anchor: number; head: number }
   | { t: 'flushed'; req: string; ok?: boolean }
@@ -53,6 +57,8 @@ export function isWebMessage(m: unknown): m is WebMessage {
     case 'edit': return isStr(msg.txn) && isInt(msg.baseVersion) && Array.isArray(msg.patches) && isStr(msg.kind)
       && msg.patches.every(p => p && typeof p === 'object' && isInt(p.from) && isInt(p.to) && isStr(p.expected) && isStr(p.insert));
     case 'complete': return isReq(msg.req) && isInt(msg.version) && isInt(msg.at) && (msg.ctx === 'prose' || msg.ctx === 'math') && isTrigger(msg.trigger);
+    case 'resolveCompletion': return isReq(msg.resolution) && isReq(msg.req) && isInt(msg.item) && isInt(msg.version) && isInt(msg.at);
+    case 'cancelCompletion': return isReq(msg.req);
     case 'runItemCommand': return isReq(msg.req) && isInt(msg.item);
     case 'selection': return isInt(msg.version) && isInt(msg.anchor) && isInt(msg.head);
     case 'flushed': return isReq(msg.req) && (msg.ok === undefined || typeof msg.ok === 'boolean');

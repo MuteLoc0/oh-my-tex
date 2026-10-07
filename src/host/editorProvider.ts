@@ -14,7 +14,10 @@ export class EditorProvider implements vscode.CustomTextEditorProvider, vscode.D
 
   constructor(context: vscode.ExtensionContext, services: SessionServices) {
     this.context = context; this.services = services;
-    const refresh = () => { for (const s of this.sessions) { void s.refreshSettings(); } };
+    const refresh = () => {
+      void services.workshop.refreshAvailability();
+      for (const s of this.sessions) { void s.refreshSettings(); }
+    };
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration(e => {
         if (['editor', 'workbench.colorTheme', 'workbench.colorCustomizations', 'latex-workshop.intellisense', 'oh-my-tex'].some(k => e.affectsConfiguration(k))) { refresh(); }
@@ -67,6 +70,7 @@ export class EditorProvider implements vscode.CustomTextEditorProvider, vscode.D
   }
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): void {
+    void this.services.workshop.refreshAvailability();
     panel.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')] };
     const session = new Session(document, panel, this.services);
     session.recordMessages = this.context.extensionMode === vscode.ExtensionMode.Test;

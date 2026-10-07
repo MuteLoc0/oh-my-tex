@@ -17,11 +17,11 @@ export async function checkBundle(filename = path.resolve('dist/extension.js')) 
   class EventEmitter { event = () => disposable(); fire() {} dispose() {} }
   const vscode = {
     EventEmitter, ExtensionMode: { Production: 1, Development: 2, Test: 3 },
-    extensions: { onDidChange: disposable },
-    workspace: { onDidChangeTextDocument: disposable, onDidChangeConfiguration: disposable, onWillSaveTextDocument: disposable, onDidSaveTextDocument: disposable, onDidOpenTextDocument: disposable, createFileSystemWatcher: () => ({ onDidChange: disposable, onDidCreate: disposable, onDidDelete: disposable, dispose() {} }), getConfiguration: () => ({ get: (_k, d) => d }) },
+    extensions: { onDidChange: disposable, getExtension: () => undefined },
+    workspace: { onDidChangeTextDocument: disposable, onDidChangeConfiguration: disposable, onWillSaveTextDocument: disposable, onDidSaveTextDocument: disposable, onDidOpenTextDocument: disposable, onDidCloseTextDocument: disposable, onDidChangeWorkspaceFolders: disposable, createFileSystemWatcher: () => ({ onDidChange: disposable, onDidCreate: disposable, onDidDelete: disposable, dispose() {} }), getConfiguration: () => ({ get: (_k, d) => d }) },
     window: { onDidChangeActiveColorTheme: disposable, onDidChangeTextEditorSelection: disposable, activeTextEditor: { document: { uri } },
       registerCustomEditorProvider: (name, provider) => { providers.set(name, provider); return disposable(); } },
-    commands: { registerCommand: (name, handler) => { commands.set(name, handler); return disposable(); }, executeCommand: async (...args) => { calls.push(args); } },
+    commands: { getCommands: async () => [], registerCommand: (name, handler) => { commands.set(name, handler); return disposable(); }, executeCommand: async (...args) => { calls.push(args); } },
   };
   const module = { exports: {} };
   const allowed = new Set(['node:crypto', 'node:path', 'crypto', 'path']);

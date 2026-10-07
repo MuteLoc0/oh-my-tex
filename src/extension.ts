@@ -4,16 +4,19 @@ import { DocumentSync } from './host/documentSync.ts';
 import { EditorProvider, VIEW_TYPE } from './host/editorProvider.ts';
 import { ProjectIndex } from './host/projectIndex.ts';
 import { WorkshopBridge } from './host/workshopBridge.ts';
+import { configureGrammarFallback } from './host/grammar.ts';
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
+  configureGrammarFallback(context.extensionUri);
   const sync = new DocumentSync(), project = new ProjectIndex(context.workspaceState);
   const services = { sync, project, workshop: new WorkshopBridge(), completion: new CompletionBridge(context.globalStorageUri) };
+  await services.workshop.refreshAvailability();
   const provider = new EditorProvider(context, services);
   const withSession = (action: (s: NonNullable<ReturnType<EditorProvider['active']>>) => unknown) => () => {
     const session = provider.active();
     if (session) { return Promise.resolve(action(session)).catch(error => services.workshop.report(error)); }
   };
-  context.subscriptions.push(sync, project, provider,
+  context.subscriptions.push(sync, project, services.completion, provider,
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, { supportsMultipleEditorsPerDocument: true, webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('oh-my-tex.toggleVisual', () => {
       const session = provider.active();

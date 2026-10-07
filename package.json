@@ -2,7 +2,7 @@
   "name": "oh-my-tex",
   "displayName": "Oh My TeX",
   "description": "Edit LaTeX prose and formulas on one page: formulas become in-place visual math fields, the .tex source stays authoritative.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "MuteLoc0",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -26,6 +26,7 @@
     "onLanguage:latex"
   ],
   "main": "./dist/extension.js",
+  "extensionKind": ["ui"],
   "contributes": {
     "customEditors": [
       {

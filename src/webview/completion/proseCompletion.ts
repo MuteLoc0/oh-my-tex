@@ -10,6 +10,7 @@ import { activeFormulaRange } from '../editor/formulas.ts';
 import { snippetSpec } from '../snippet/snippetSession.ts';
 import type { SyncClient } from '../sync.ts';
 import { CompletionPopup } from './popup.ts';
+import { CompletionResolver } from './resolve.ts';
 
 type Trigger = Extract<WebMessage, { t: 'complete' }>['trigger'];
 interface Request {
@@ -31,9 +32,10 @@ export class ProseCompletion {
   private accepting = false;
   private sync: SyncClient;
   private post: (message: WebMessage) => void;
-  constructor(sync: SyncClient, post: (message: WebMessage) => void) { this.sync = sync; this.post = post; }
+  private readonly resolver: CompletionResolver;
+  constructor(sync: SyncClient, post: (message: WebMessage) => void) { this.sync = sync; this.post = post; this.resolver = new CompletionResolver(sync, post); }
   attach(view: EditorView) {
-    this.view = view; this.popup = new CompletionPopup(view, index => { this.selected = index; this.accept(); });
+    this.view = view; this.popup = new CompletionPopup(view, index => { this.resolver.cancel(); this.selected = index; this.accept(); });
     view.contentDOM.addEventListener('blur', () => this.close());
     view.scrollDOM.addEventListener('scroll', () => this.render());
   }
@@ -53,6 +55,7 @@ export class ProseCompletion {
   }
   update(update: ViewUpdate) {
     if (this.accepting) { return; }
+    if (update.docChanged || update.selectionSet) { this.resolver.cancel(); }
     if (this.sync.composing || this.view?.composing) { this.close(); return; }
     if (update.transactions.some(tr => tr.annotation(remoteEdit))) { this.close(); return; }
     if (activeFormulaRange()) { this.close(); return; }
@@ -91,6 +94,8 @@ export class ProseCompletion {
   }
   async request(trigger: Trigger, retry = 0) {
     clearTimeout(this.timer); this.timer = undefined;
+    this.resolver.cancel();
+    if (this.requestState) { this.post({ t: 'cancelCompletion', req: this.requestState.req }); }
     if (this.sync.composing || this.view?.composing) { this.close(); return; }
     const generation = ++this.generation;
     await this.sync.flush();
@@ -114,6 +119,7 @@ export class ProseCompletion {
     // A truncated provider result must be queried again for the prefix typed while it was in flight.
     if (message.isIncomplete && !request.changes.empty) { this.schedule({ kind: 'incomplete' }); }
   }
+  receiveResolved(message: Extract<HostMessage, { t: 'completionResolved' }>) { this.resolver.receive(message); }
   private mapItem(item: CompletionItemDTO, request: Request): CompletionItemDTO {
     const m = request.changes, r = item.range;
     return { ...item, range: { insFrom: m.mapPos(r.insFrom, -1), insTo: m.mapPos(r.insTo, 1), repFrom: m.mapPos(r.repFrom, -1), repTo: m.mapPos(r.repTo, 1) },
@@ -141,6 +147,7 @@ export class ProseCompletion {
   private render() { if (this.view) { this.popup?.show(this.listed, this.selected, this.view.state.selection.main.head); } }
   private move(delta: number) {
     if (!this.listed.length) { return false; }
+    this.resolver.cancel();
     this.selected = (this.selected + delta + this.listed.length) % this.listed.length; this.render(); return true;
   }
   private variables(from: number, to: number): Record<string, string> {
@@ -157,6 +164,23 @@ export class ProseCompletion {
     if (this.sync.composing || this.view?.composing) { this.close(); return false; }
     const item = this.listed[this.selected], view = this.view, request = this.requestState;
     if (!item || !view || !request) { return false; }
+    if (item.needsResolve) {
+      if (this.resolver.pending) { return true; }
+      clearTimeout(this.timer); this.timer = undefined;
+      const at = view.state.selection.main.head, generation = this.generation;
+      this.resolver.start(request.req, item.i, view, at,
+        () => this.requestState === request && this.generation === generation && view.hasFocus && !view.composing
+          && !this.sync.composing && view.state.selection.main.head === at && this.listed[this.selected]?.i === item.i,
+        (resolved, version) => {
+          if (!resolved || resolved.needsResolve) {
+            this.post({ t: 'log', level: 'warn', message: 'Completion changed while resolving; choose it again.' });
+            void this.request({ kind: 'invoke' }); return;
+          }
+          this.requestState = { ...request, version, at, doc: view.state.doc, changes: ChangeSet.empty(view.state.doc.length), items: [resolved], incomplete: false };
+          this.listed = [resolved]; this.selected = 0; this.accept();
+        });
+      return true;
+    }
     const from = this.settings?.suggestReplace ? item.range.repFrom : item.range.insFrom;
     const to = this.settings?.suggestReplace ? item.range.repTo : item.range.insTo;
     const parsed = item.insert.snippet ? parseSnippet(item.insert.value, this.variables(from, to)) : { text: item.insert.value, tabstops: [] };
@@ -177,5 +201,9 @@ export class ProseCompletion {
     });
     return true;
   }
-  close() { clearTimeout(this.timer); this.timer = undefined; this.generation++; this.requestState = undefined; this.listed = []; this.selected = 0; this.popup?.hide(); }
+  close() {
+    this.resolver.cancel();
+    if (this.requestState) { this.post({ t: 'cancelCompletion', req: this.requestState.req }); }
+    clearTimeout(this.timer); this.timer = undefined; this.generation++; this.requestState = undefined; this.listed = []; this.selected = 0; this.popup?.hide();
+  }
 }
