@@ -215,6 +215,8 @@ class FormulaSession {
   private argEditor?: MacroArgEditor;
   private tools = document.createElement('div');
   private abort = new AbortController();
+  private scrollIntent = 0;
+  private scrollAnchor?: { top: number; intent: number };
 
   constructor(view: EditorView, span: FormulaSpan, dom: HTMLElement, canon: Canonicalizer) {
     this.view = view; this.span = span; this.dom = dom; this.canon = canon;
@@ -247,8 +249,8 @@ class FormulaSession {
       end: () => {
         const original = this.bufferState?.originalBody;
         this.bufferState = undefined;
-        // The live model was never modified by the command buffer. Preserve its
-        // selection and template prompts when cancellation restored the baseline.
+        // The inline command session already restored its saved live model.
+        // Reproject only when the authoritative source changed meanwhile.
         if (active === this && this.body !== original) { this.reproject(); }
       },
       focus: () => {
@@ -262,6 +264,14 @@ class FormulaSession {
     this.tools.className = 'omt-macro-tools'; document.body.append(this.tools); this.renderTools();
     window.addEventListener('resize', () => this.positionTools(), { signal: this.abort.signal });
     view.scrollDOM.addEventListener('scroll', () => this.positionTools(), { signal: this.abort.signal });
+    for (const name of ['wheel', 'touchmove', 'pointerdown']) {
+      // Parameter fields and completion menus live outside CodeMirror's DOM.
+      // An interaction anywhere may transfer focus or scroll a floating editor.
+      document.addEventListener(name, () => { this.scrollIntent++; this.scrollAnchor = undefined; }, { capture: true, passive: true, signal: this.abort.signal });
+    }
+    document.addEventListener('keydown', event => {
+      if (event.key === 'PageUp' || event.key === 'PageDown') { this.scrollIntent++; this.scrollAnchor = undefined; }
+    }, { capture: true, signal: this.abort.signal });
   }
 
   private load() {
@@ -324,11 +334,45 @@ class FormulaSession {
     if (!patch) { return; }
     const span = this.locate();
     if (!span) { return; }
-    this.view.dispatch({
-      changes: { from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert },
-      annotations: [mathEdit.of(true), editKind.of('math')],
-    });
+    this.dispatchLocal({ from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert }, 'math');
     this.renderTools();
+  }
+
+  /** Preserve the visual formula through every source write, including its parameters. */
+  private dispatchLocal(changes: Change | Change[], kind: string) {
+    const scroller = this.view.scrollDOM;
+    const viewportTop = scroller.getBoundingClientRect().top + scroller.clientTop;
+    const bounds = this.dom.getBoundingClientRect();
+    // A tall formula may only be partly visible while its caret or parameter
+    // editor is on screen. It needs the same protection as a short formula.
+    if (!this.scrollAnchor && bounds.bottom > viewportTop && bounds.top < viewportTop + scroller.clientHeight) {
+      this.scrollAnchor = { top: bounds.top - viewportTop, intent: this.scrollIntent };
+    }
+    const anchor = this.scrollAnchor;
+    this.view.dispatch({ changes, annotations: [mathEdit.of(true), editKind.of(kind)] });
+    if (!anchor) { return; }
+    this.view.requestMeasure({
+      key: this,
+      // Rapid input can replace a queued measure request. Keep the earliest
+      // pending baseline instead of capturing an intermediate scroll correction.
+      read: () => anchor,
+      // CodeMirror adjusts its scroll anchor after measure writes. Restore our
+      // DOM position only once that cycle has completed.
+      write: anchor => queueMicrotask(() => {
+        if (this.scrollAnchor !== anchor) { return; }
+        this.scrollAnchor = undefined;
+        const focused = document.activeElement;
+        if (active !== this || this.abort.signal.aborted || anchor.intent !== this.scrollIntent ||
+            !(this.dom.contains(focused) || this.argEditor?.element.contains(focused) || this.tools.contains(focused) || completion?.ownsFocus() ||
+              (this.restoringFocus && focused === document.body))) { return; }
+        const offset = this.dom.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientTop - anchor.top;
+        if (Math.abs(offset) > 0.5) { scroller.scrollTop += offset; }
+        // The parameter field has its own floating scroller. Only reveal the
+        // main caret when the main field currently owns keyboard focus.
+        if (focused === this.field.element) { this.field.reveal(); }
+        this.positionTools();
+      }),
+    });
   }
 
   private rejectInput(reason: string) {
@@ -410,7 +454,7 @@ class FormulaSession {
       this.body = this.body.slice(0, patch.from) + patch.insert + this.body.slice(patch.to);
       changes.push({ from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert });
     }
-    if (changes.length) { this.view.dispatch({ changes, annotations: [mathEdit.of(true), editKind.of(kind)] }); }
+    if (changes.length) { this.dispatchLocal(changes, kind); }
     // Rebuild the main field after each argument change. Repeated #n uses now
     // render the same new source argument, while definitions stay untouched.
     if (patch) { this.reproject(); }
@@ -445,7 +489,7 @@ class FormulaSession {
     const patch = diffText(this.body, body);
     this.body = body;
     if (patch) {
-      this.view.dispatch({ changes: { from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert }, annotations: editKind.of('mathCompletionPrefix') });
+      this.dispatchLocal({ from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert }, 'mathCompletionPrefix');
     }
     const from = (this.locate() ?? span).bodyFrom + markedBody.indexOf(marker);
     return { from, to: from + prefix.length };
@@ -469,7 +513,7 @@ class FormulaSession {
       this.body = body; this.bufferState = undefined;
       const changes = [...extras];
       if (patch) { changes.push({ from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert }); }
-      if (changes.length) { this.view.dispatch({ changes, annotations: [mathEdit.of(true), editKind.of('mathCompletion')] }); }
+      if (changes.length) { this.dispatchLocal(changes, 'mathCompletion'); }
       this.reproject(); this.completedCallFrom = completed.from;
       return true;
     }
@@ -487,7 +531,7 @@ class FormulaSession {
     const patch = diffText(this.body, body); this.body = body;
     const changes = [...extras];
     if (patch) { changes.push({ from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert }); }
-    if (changes.length) { this.view.dispatch({ changes, annotations: [mathEdit.of(true), editKind.of('mathCompletion')] }); }
+    if (changes.length) { this.dispatchLocal(changes, 'mathCompletion'); }
     const next = project(this.span, this.body, context);
     if (next.islands.length !== this.projection.islands.length) { this.reproject(); }
     else { this.renderTools(); }
@@ -545,6 +589,7 @@ class FormulaSession {
     const args = this.argEditor; this.argEditor = undefined;
     if (args?.isOpen && completion?.active) { queueMicrotask(() => args.close(false)); }
     else { args?.close(false); }
+    this.scrollAnchor = undefined;
     this.abort.abort(); this.tools.remove();
     this.field.dispose();
     this.dom.classList.remove('omt-live');

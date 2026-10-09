@@ -62,9 +62,16 @@ export class EditorProvider implements vscode.CustomTextEditorProvider, vscode.D
       // Reverse sync: a native selection (e.g. from PDF inverse search) follows into our views.
       vscode.window.onDidChangeTextEditorSelection(event => {
         if (services.workshop.ignoresSelection(event)) { return; }
+        const command = event.kind === vscode.TextEditorSelectionChangeKind.Command;
+        // Background native cursors also move when our workspace edits land.
+        // Only intentional navigation may drive the visual editor's viewport.
+        if (!command && event.textEditor !== vscode.window.activeTextEditor) { return; }
         const selection = event.selections[0];
         if (!selection) { return; }
-        for (const s of this.sessions) { if (s.document === event.textEditor.document) { s.reveal(selection, false); } }
+        for (const s of this.sessions) {
+          if (s.document !== event.textEditor.document || event.kind === undefined && s.panel.active) { continue; }
+          s.reveal(selection, false);
+        }
       }),
     );
   }

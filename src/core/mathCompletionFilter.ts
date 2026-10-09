@@ -1,4 +1,5 @@
 import { MATH_COMMANDS, MATH_ENVIRONMENTS } from './mathCommands.ts';
+import { isWordCompletion } from './completionFilter.ts';
 import type { MacroDef } from '../shared/types.ts';
 
 interface MathCandidate {
@@ -6,6 +7,7 @@ interface MathCandidate {
   filterText?: string;
   insert: { value: string };
   source?: string;
+  kind?: number;
 }
 
 function compilePatterns(patterns: readonly string[]): RegExp[] {
@@ -15,6 +17,7 @@ function compilePatterns(patterns: readonly string[]): RegExp[] {
 }
 
 function allowed(item: MathCandidate, macros: readonly MacroDef[], patterns: readonly RegExp[]): boolean {
+  if (isWordCompletion(item)) { return false; }
   if (item.source === 'template' || item.source === 'macro') { return true; }
   if (patterns.some(pattern => [item.label, item.filterText ?? '', item.insert.value].some(value => pattern.test(value)))) { return true; }
   const body = item.insert.value.trimStart();

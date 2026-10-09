@@ -143,7 +143,7 @@ for (const name of names) {
         await page.evaluate(position => (window as unknown as { __omt: { setCaret(p: number): void } }).__omt.setCaret(position), source.length);
       }
       await page.keyboard.type('\\' + name.slice(0, -1));
-      if (ctx === 'math') { await expect(page.locator('.omt-math-buffer input')).toBeVisible(); }
+      if (ctx === 'math') { await expect(page.locator('math-field.omt-math-command')).toBeVisible(); }
       // Project macro labels retain their leading backslash in the popup.
       const label = page.locator('.omt-completion-item').filter({ hasText: `\\${name}` }).first();
       await expect(label).toBeVisible();

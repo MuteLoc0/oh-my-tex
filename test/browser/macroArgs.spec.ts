@@ -84,7 +84,7 @@ async function endOfField(field: Locator) {
 
 async function prefix(page: Page, value: string) {
   await page.keyboard.type('\\');
-  await expect(page.locator('.omt-math-buffer input')).toBeVisible();
+  await expect(page.locator('math-field.omt-math-command')).toBeVisible();
   await page.keyboard.type(value);
 }
 
@@ -336,7 +336,7 @@ test('Escape cancels a parameter command buffer and restores the exact call', as
   await page.keyboard.press('Escape');
   await host.flush();
   expect(host.text).toBe(original);
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   await expect(page.locator('.omt-macro-args')).toBeVisible();
   expectCleanSource(host);
 });
@@ -378,7 +378,7 @@ test('invalid additional edits cancel parameter completion and restore its edita
   await page.keyboard.press('Enter');
   await host.flush();
   expect(host.text).toBe(original);
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   await expect(page.locator('.omt-macro-args')).toBeVisible();
   expect(await argument(page, 1).evaluate(element => (element as TestMathField).getValue('latex-without-placeholders'))).toBe('x');
   expect(host.commands).toEqual([]);
@@ -405,7 +405,7 @@ test('a foreign edit cancels an outstanding parameter completion without losing 
   await host.flush();
   await page.waitForTimeout(350);
   await expect(page.locator('.omt-completion')).toBeHidden();
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   expect(host.text).toBe('Native ' + original);
   await reopenMacroIfNeeded(page, 'norm');
   await replaceArgument(page, 1, 'y');
@@ -515,7 +515,7 @@ for (const remove of ['formula', 'closing delimiter']) {
     await page.waitForTimeout(350);
     expect(host.text).toBe(remove === 'formula' ? '' : original.slice(0, -1));
     await expect(page.locator('.omt-macro-args')).toHaveCount(0);
-    await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+    await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
     await expect(page.locator('.omt-live')).toHaveCount(0);
     await expect(page.locator('.omt-completion')).toBeHidden();
     expectCleanSource(host);

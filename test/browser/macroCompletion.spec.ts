@@ -52,7 +52,7 @@ async function end(field: Locator) {
 
 async function suggest(page: Page, name: string) {
   await page.keyboard.type('\\' + name);
-  await expect(page.locator('.omt-math-buffer input')).toBeVisible();
+  await expect(page.locator('math-field.omt-math-command')).toBeVisible();
   await expect(page.locator('.omt-completion-item')).toContainText('\\' + name);
 }
 
@@ -230,7 +230,7 @@ for (const [name, snippet] of [['comment suffix', 'bm{$1}% comment'], ['unbalanc
     await page.keyboard.press('Enter');
     await host.flush();
     expect(host.text).toBe(source);
-    await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+    await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
     await expect(page.locator('.omt-completion')).toBeHidden();
     await expect(page.locator('.omt-macro-args')).toHaveCount(0);
     clean(host); expect(errors).toEqual([]);
@@ -246,7 +246,7 @@ test('a known macro completion containing a math closing command preserves the w
   await page.keyboard.press('Enter');
   await host.flush();
   expect(host.text).toBe(source);
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   await expect(page.locator('.omt-completion')).toBeHidden();
   await expect(page.locator('.omt-macro-args')).toHaveCount(0);
   clean(host); expect(errors).toEqual([]);
@@ -281,25 +281,14 @@ async function holdArgumentFocus(page: Page, selector = '.omt-macro-args') {
   }, selector);
 }
 
-test('a normal fraction template buffers its first key while the main MathLive field is waiting for focus', async ({ page }) => {
+test('a normal fraction template keeps MathLive focus and accepts its first key immediately', async ({ page }) => {
   const { host, errors } = await setup(page, {
     completion: (request, current) => ({ items: [candidate(request, current, 'frac', 'frac{$1}{$2}$0', { source: 'provider' })] }),
   });
   await suggest(page, 'frac');
-  // The main field was positioned before suggestion. Hold only the focus
-  // request made after acceptance, so this forces the return-to-field gap.
-  await holdArgumentFocus(page, '.omt-live');
-  try {
-    await page.keyboard.press('Enter');
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __omtFocusGap: FocusGap }).__omtFocusGap.attempts)).toBeGreaterThan(0);
-    expect(await page.evaluate(() => {
-      const gap = (window as unknown as { __omtFocusGap: FocusGap }).__omtFocusGap;
-      return Boolean(gap.pending?.isConnected && document.activeElement !== gap.pending);
-    })).toBe(true);
-    await page.keyboard.type('x');
-    expect(await page.evaluate(() => (window as unknown as { __omtFocusGap: FocusGap }).__omtFocusGap.events
-      .some(event => event.type === 'keydown' && event.data === 'x' && !event.focused))).toBe(true);
-  } finally { await page.evaluate(() => (window as unknown as { __omtFocusGap: FocusGap }).__omtFocusGap.release()); }
+  await expect(main(page)).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('x');
   await expect(main(page)).toBeFocused();
   await expect(page.locator('.omt-macro-args')).toHaveCount(0);
   await host.flush();
@@ -435,9 +424,12 @@ test('triggerSuggest opens an editable command buffer before the accepted edit i
     await page.keyboard.press('Enter');
     await expect.poll(() => blocked).toBe(true);
     expect(released).toBe(false);
-    await expect(page.locator('.omt-math-buffer input')).toBeFocused();
+    await expect(page.locator('math-field.omt-math-command')).toBeFocused();
     await page.keyboard.type('al');
-    await expect(page.locator('.omt-math-buffer input')).toHaveValue('al');
+    await expect.poll(() => page.locator('math-field.omt-math-command').evaluate(element => {
+      const field = element as unknown as { position: number; getValue(from: number, to: number, format: string): string };
+      return field.getValue(field.position - 2, field.position, 'latex');
+    })).toBe('al');
     expect(host.requests).toHaveLength(requestsBeforeAcceptance);
   } finally { released = true; unblock(); }
   await expect(page.locator('.omt-completion-item')).toContainText('\\alpha');

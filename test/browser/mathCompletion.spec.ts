@@ -47,7 +47,7 @@ async function enterFormula(page: Page) {
 
 async function prefix(page: Page, value: string) {
   await page.keyboard.type('\\');
-  await expect(page.locator('.omt-math-buffer input')).toBeVisible();
+  await expect(page.locator('math-field.omt-math-command')).toBeVisible();
   await page.keyboard.type(value);
 }
 
@@ -98,7 +98,7 @@ test('Escape withdraws the temporary command and restores the original source by
   await page.keyboard.press('Escape');
   await host.flush();
   expect(host.text).toBe(original);
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   await expect(page.locator('.omt-completion')).toBeHidden();
   await page.waitForFunction(() => document.activeElement?.tagName === 'MATH-FIELD');
   expectCleanSource(host);
@@ -116,7 +116,7 @@ test('an initial backslash keeps the live formula mounted and Escape removes its
   // An isolated backslash must not escape the closing dollar delimiter.
   expect(host.text).toMatch(/\$x\+\\\s+\$$/);
   await expect(page.locator('.omt-live math-field')).toHaveCount(1);
-  await expect(page.locator('.omt-math-buffer input')).toBeVisible();
+  await expect(page.locator('math-field.omt-math-command')).toBeVisible();
   await page.keyboard.press('Escape');
   await host.flush();
   expect(host.text).toBe(original);
@@ -249,7 +249,7 @@ test('Escape cancels an outstanding math response and its late result stays hidd
   await host.flush();
   await page.waitForTimeout(350);
   await expect(page.locator('.omt-completion')).toBeHidden();
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   expect(host.text).toBe('$x+$');
 });
 
@@ -265,7 +265,7 @@ test('a foreign edit cancels a math completion while preserving the native edit'
   await host.flush();
   await page.waitForTimeout(350);
   await expect(page.locator('.omt-completion')).toBeHidden();
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   expect(host.text).toBe('Native $x+$');
   expectCleanSource(host);
 });
@@ -330,7 +330,7 @@ test('macro context version and definition locations can refresh without cancell
     macros: defs.map((macro, i) => ({ ...macro, source: { uri: 'file:///macros.tex', from: 100 + i, to: 120 + i } })),
     templates: [], diagnostics: [],
   }, '*'), macros);
-  await expect(page.locator('.omt-math-buffer input')).toBeVisible();
+  await expect(page.locator('math-field.omt-math-command')).toBeVisible();
   await expect(page.locator('.omt-completion-item')).toContainText('\\frac');
   await page.keyboard.press('Enter');
   await host.flush();
@@ -395,7 +395,7 @@ test('beforeinput can start math completion without a preceding keydown', async 
     return event.defaultPrevented;
   });
   expect(intercepted).toBe(true);
-  await expect(page.locator('.omt-math-buffer input')).toBeVisible();
+  await expect(page.locator('math-field.omt-math-command')).toBeVisible();
   await page.keyboard.type('fr');
   await expect(page.locator('.omt-completion-item')).toContainText('\\frac');
   await page.keyboard.press('Escape');
@@ -412,15 +412,14 @@ test('IME composition waits until commit before refreshing an incomplete math co
   await expect(page.locator('.omt-completion-item')).toContainText('\\frac');
   const before = host.requests.length;
   await page.evaluate(() => {
-    const input = document.querySelector('.omt-math-buffer input') as HTMLInputElement;
+    const input = document.querySelector('math-field.omt-math-command')!;
     input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
-    input.value = '\\fr';
-    input.dispatchEvent(new InputEvent('input', { data: 'fr', inputType: 'insertCompositionText', isComposing: true, bubbles: true }));
+    input.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'fr', bubbles: true }));
   });
   await page.waitForTimeout(75);
   expect(host.requests).toHaveLength(before);
   await page.evaluate(() => {
-    document.querySelector('.omt-math-buffer input')!.dispatchEvent(new CompositionEvent('compositionend', { data: 'fr', bubbles: true }));
+    document.querySelector('math-field.omt-math-command')!.dispatchEvent(new CompositionEvent('compositionend', { data: 'fr', bubbles: true }));
   });
   await expect.poll(() => host.requests.length).toBeGreaterThan(before);
   expect(host.completionDocuments[host.completionDocuments.length - 1]!.text).toContain('\\fr');
@@ -459,7 +458,7 @@ test('an invalid math template withdraws its prefix and restores the original so
   await page.keyboard.press('Enter');
   await host.flush();
   expect(host.text).toBe(original);
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   await expect(page.locator('.omt-completion')).toBeHidden();
   expect(host.commands).toEqual([]);
   expectCleanSource(host);
@@ -548,7 +547,7 @@ test('Tab-only math completion forwards Enter once to MathLive and Tab still acc
     });
   });
   await page.keyboard.press('Enter');
-  await expect(page.locator('.omt-math-buffer')).toBeHidden();
+  await expect(page.locator('math-field.omt-math-command')).toBeHidden();
   await expect.poll(() => page.evaluate(() => document.body.dataset.enterCount)).toBe('1');
   await host.flush();
   expect(host.text).toBe('$x+$');

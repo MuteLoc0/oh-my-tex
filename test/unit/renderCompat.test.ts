@@ -33,9 +33,9 @@ test('package compatibility consumes its declared arguments and expands display 
     ['abs', ['x'], '\\left|{x}\\right|'],
     ['norm', ['x'], '\\left\\lVert{x}\\right\\rVert'],
     ['qty', ['x'], '\\left({x}\\right)'],
-    ['bra', ['x'], '\\left\\langle{x}\\right|'],
-    ['ket', ['x'], '\\left|{x}\\right\\rangle'],
-    ['braket', ['x|y'], '\\left\\langle{x|y}\\right\\rangle'],
+    ['bra', ['x'], '\\mathinner{\\langle{{x}}|}'],
+    ['ket', ['x'], '\\mathinner{|{{x}}\\rangle}'],
+    ['braket', ['x|y'], '\\mathinner{\\langle{{x|y}}\\rangle}'],
   ];
   for (const [name, args, expected] of cases) {
     assert.equal(RENDER_COMPAT[name].args, args.length, name);
@@ -53,9 +53,9 @@ test('engine commands suppress compatibility injection while project definitions
   const project: MacroDef[] = [{ name: 'abs', arity: 1, body: '#1+1' }, { name: 'bm', arity: 1, body: '\\symbfit{#1}' }];
   const overrides: MacroDef[] = [{ name: 'abs', arity: 1, body: '\\sqrt{#1}' }, { name: 'dots', arity: 0, body: '\\cdots' }];
   const merged = definitions(project, overrides, ['bm', 'bra', 'ket', 'braket', 'dots']);
-  assert.equal(merged.has('bra'), false);
-  assert.equal(merged.has('ket'), false);
-  assert.equal(merged.has('braket'), false);
+  for (const name of ['bra', 'ket', 'braket']) {
+    assert.deepEqual(merged.get(name), { name, body: RENDER_COMPAT[name].def, arity: 1 });
+  }
   assert.equal(merged.get('bm')!.body, '\\symbfit{#1}');
   assert.equal(merged.get('abs')!.body, '\\sqrt{#1}');
   assert.equal(merged.get('dots')!.body, '\\cdots');
@@ -73,6 +73,15 @@ test('render overrides preserve project call semantics, operator metadata and so
   assert.notEqual(result, original);
   assert.equal(JSON.stringify([original, override]), snapshot);
   assert.deepEqual(definitions([original]).get('pair'), original);
+});
+
+test('display overrides retain source-owned braket argument semantics', () => {
+  const rendered = definitions([], [{ name: 'bra', arity: 0, body: 'R' }], ['bra']).get('bra');
+  assert.deepEqual(rendered, { name: 'bra', arity: 1, body: 'R' });
+  const source = '\\bra  { x }';
+  const projected = buildIslands(source, new Map([['bra', rendered!]]));
+  assert.equal(projected.islands[0].args.length, 1);
+  assert.equal(restoreIslands(projected.view, projected.islands), source);
 });
 
 test('display compatibility islands always restore exact source calls after unrelated edits', () => {

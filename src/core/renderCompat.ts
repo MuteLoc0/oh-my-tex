@@ -40,14 +40,21 @@ export const RENDER_COMPAT: Record<string, { def: string; args: number }> = {
   abs: { def: '\\left|#1\\right|', args: 1 },
   norm: { def: '\\left\\lVert#1\\right\\rVert', args: 1 },
   qty: { def: '\\left(#1\\right)', args: 1 },
-  bra: { def: '\\left\\langle#1\\right|', args: 1 },
-  ket: { def: '\\left|#1\\right\\rangle', args: 1 },
-  braket: { def: '\\left\\langle#1\\right\\rangle', args: 1 },
+  bra: { def: '\\mathinner{\\langle{#1}|}', args: 1 },
+  ket: { def: '\\mathinner{|{#1}\\rangle}', args: 1 },
+  braket: { def: '\\mathinner{\\langle{#1}\\rangle}', args: 1 },
 };
+
+// MathLive's native braket-package macros expose their expanded atoms for editing,
+// but serialize the original argument string. Editing x to y can therefore show y
+// while getValue() still returns \\bra{x}. Give these calls source-owned arguments,
+// using their native display definitions so existing delimiter sizing is retained.
+const SOURCE_ARGUMENTS = new Set(['bra', 'ket', 'braket']);
 
 /**
  * Definitions used for display, with precedence overrides > project > compatibility.
- * The engine's own commands win over compatibility entries only. A render override
+ * The engine's own commands win over compatibility entries except macros whose
+ * editable arguments cannot round-trip through the engine. A render override
  * changes an existing project definition's body without changing how its source calls
  * are parsed, located or edited.
  */
@@ -56,9 +63,12 @@ export function renderDefinitions(
 ): MacroDef[] {
   const result = new Map<string, MacroDef>();
   for (const [name, compat] of Object.entries(RENDER_COMPAT)) {
-    if (!knowsCommand(name)) { result.set(name, { name, body: compat.def, arity: compat.args }); }
+    if (SOURCE_ARGUMENTS.has(name) || !knowsCommand(name)) { result.set(name, { name, body: compat.def, arity: compat.args }); }
   }
   const originals = new Map(project.map(macro => [macro.name, macro]));
+  for (const name of SOURCE_ARGUMENTS) {
+    if (!originals.has(name)) { originals.set(name, result.get(name)!); }
+  }
   for (const macro of project) { result.set(macro.name, { ...macro }); }
   for (const override of overrides) {
     const original = originals.get(override.name);

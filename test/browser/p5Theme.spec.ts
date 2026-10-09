@@ -87,7 +87,7 @@ test('search can open from an active math field and leaves no math completion bu
   await search.fill('needle');
   await search.press('Enter');
   await expect(page.locator('.cm-content')).toContainText('$a+needle$');
-  await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+  await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
   await host.flush();
   expect(host.edits).toEqual([]);
 });

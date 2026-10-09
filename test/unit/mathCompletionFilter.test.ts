@@ -26,6 +26,13 @@ test('math completion: project macros and explicit templates remain available', 
   assert.equal(isMathCompletion({ ...item('myNorm{$1}'), source: 'macro' }, [macro]), true);
 });
 
+test('math completion: words that resemble math commands remain excluded', () => {
+  assert.equal(isMathCompletion({ ...item('psi'), source: 'word' }), false);
+  assert.equal(isMathCompletion({ ...item('Psi'), source: 'provider', kind: 0 }), false);
+  assert.equal(isMathCompletion({ ...item('psi'), source: 'word' }, [], ['.*']), false);
+  assert.equal(isMathCompletion({ ...item('Psi'), source: 'provider', kind: 2 }), true);
+});
+
 test('math completion: MathLive matrix/cases/aligned environments and supported variants are retained', () => {
   for (const environment of ['matrix', 'pmatrix', 'matrix*', 'cases', 'aligned', 'array']) {
     assert.equal(isMathCompletion(item(`begin{${environment}}$1\\end{${environment}}`)), true, environment);

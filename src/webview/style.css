@@ -45,9 +45,6 @@ math-field::part(content) { padding: 0; }
 .omt-snippet-stop { outline: 1px solid var(--vscode-editor-snippetTabstopHighlightBorder, #777); }
 .omt-snippet-active { background: var(--vscode-editor-snippetTabstopHighlightBackground, var(--vscode-editor-selectionBackground)); }
 
-.omt-math-buffer { position: fixed; z-index: 101; padding: 3px 7px; border: 1px solid var(--vscode-focusBorder, #007acc); border-radius: 4px; background: var(--vscode-input-background, #fff); box-shadow: 0 2px 8px #0003; }
-.omt-math-buffer input { min-width: 5ch; max-width: 22ch; color: var(--vscode-input-foreground, inherit); background: transparent; border: none; outline: none; font: inherit; font-family: var(--omt-editor-font-family, var(--vscode-editor-font-family, monospace)); }
-
 .omt-macro-tools, .omt-macro-args { position: fixed; z-index: 90; box-sizing: border-box;
   border: 1px solid var(--vscode-editorSuggestWidget-border, #555); border-radius: 4px;
   color: var(--vscode-editor-foreground); background: var(--vscode-editor-background);

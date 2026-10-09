@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import { LineIndex, toLF } from '../core/eol.ts';
-import { filterCompletions } from '../core/completionFilter.ts';
+import { filterCompletions, isLatexCommandPrefix, isWordCompletion } from '../core/completionFilter.ts';
 import { filterMathCompletions } from '../core/mathCompletionFilter.ts';
 import type { CompletionItemDTO, WebMessage } from '../shared/protocol.ts';
 import type { Session } from './session.ts';
 import { log } from './log.ts';
 import { SnippetStore } from './snippetStore.ts';
+import { projectMacroSnippet, sameMacroCompletion } from '../core/macroCompletion.ts';
 
 type CompleteRequest = Extract<WebMessage, { t: 'complete' }>;
 type ProviderItem = { index: number; identity: string; version: number; at: number; trigger: CompleteRequest['trigger']; resolution?: string; consumed?: boolean };
@@ -47,6 +48,7 @@ export class CompletionBridge implements vscode.Disposable {
     const fallbackRange = { insFrom: wordFrom, insTo: request.at, repFrom: wordFrom, repTo: wordTo };
     const query = text.slice(wordFrom, request.at);
     const beforeSlash = wordFrom > 0 && text[wordFrom - 1] === '\\';
+    const commandContext = request.ctx === 'math' || isLatexCommandPrefix(text.slice(0, request.at));
     // List first; provider details are fetched only for the accepted item.
     // Start independent remote work together rather than adding its round trips.
     const [provider, context, snippets] = await Promise.all([
@@ -54,7 +56,7 @@ export class CompletionBridge implements vscode.Disposable {
     ]);
     if (this.disposed || registry.disposed || registry.sequence !== sequence) { return; }
     if (document.version !== request.version || registry.sequence !== sequence) { await empty(true); return; }
-    const candidates: Candidate[] = [];
+    let candidates: Candidate[] = [];
     for (const [providerIndex, item] of (provider?.items ?? []).entries()) {
       const converted = convertItem(item, document, index, fallbackRange, position);
       if (converted) {
@@ -65,12 +67,12 @@ export class CompletionBridge implements vscode.Disposable {
     }
     for (const macro of context.macros) {
       const name = `\\${macro.name}`;
-      if (candidates.some(c => c.label === name || c.label === macro.name)) { continue; }
-      let body = `${beforeSlash ? '' : '\\'}${macro.name}`, tab = 1;
-      if (macro.defaultArgument !== undefined) { body += `[\${${tab++}:${escapeSnippet(macro.defaultArgument)}}]`; }
-      for (let a = macro.defaultArgument !== undefined ? 1 : 0; a < macro.arity; a++) { body += `{$${tab++}}`; }
-      candidates.push({ label: name, filterText: macro.name, detail: 'Project macro', doc: macro.body, kind: vscode.CompletionItemKind.Function,
-        insert: { snippet: true, value: body }, range: fallbackRange, source: 'macro' });
+      const local: Candidate = { label: name, filterText: macro.name, detail: 'Project macro', doc: macro.body, kind: vscode.CompletionItemKind.Function,
+        insert: { snippet: true, value: projectMacroSnippet(macro, beforeSlash) }, range: fallbackRange, source: 'macro' };
+      // A same-name provider must not hide the fully indexed macro behind a
+      // second remote query. Compare insertion semantics, not display labels.
+      candidates = candidates.filter(candidate => !sameMacroCompletion(candidate, local));
+      candidates.push(local);
     }
     for (const template of context.templates) {
       if (template.context !== 'both' && template.context !== request.ctx) { continue; }
@@ -83,10 +85,13 @@ export class CompletionBridge implements vscode.Disposable {
       candidates.push({ label: snippet.prefix, filterText: snippet.prefix.replace(/^\\/, ''), detail: snippet.name, doc: snippet.description,
         insert: { snippet: true, value: toLF(snippet.body) }, range, kind: vscode.CompletionItemKind.Snippet, source: 'snippet', sortText: snippet.sortText });
     }
-    candidates.push(...this.words(document, text, query).map(word => ({ label: word, insert: { snippet: false, value: word }, range: fallbackRange,
-      kind: vscode.CompletionItemKind.Text, source: 'word' as const })));
+    if (!commandContext) {
+      candidates.push(...this.words(document, text, query).map(word => ({ label: word, insert: { snippet: false, value: word }, range: fallbackRange,
+        kind: vscode.CompletionItemKind.Text, source: 'word' as const })));
+    }
     const seen = new Set<string>();
     const unique = candidates.filter(c => {
+      if (commandContext && isWordCompletion(c)) { return false; }
       const key = JSON.stringify([c.label, c.insert, c.range, c.extraEdits]);
       if (seen.has(key)) { return false; } seen.add(key); return true;
     });
@@ -211,8 +216,6 @@ export class CompletionBridge implements vscode.Disposable {
 function itemIdentity(item: Candidate): string {
   return JSON.stringify([item.label, item.kind, item.filterText, item.sortText, item.insert]);
 }
-
-const escapeSnippet = (text: string) => text.replace(/[\\$}]/g, '\\$&');
 
 function convertItem(item: vscode.CompletionItem, document: vscode.TextDocument, index: LineIndex, fallback: CompletionItemDTO['range'], position: vscode.Position): Candidate | undefined {
   const label = typeof item.label === 'string' ? item.label : item.label.label;

@@ -59,7 +59,7 @@ test('SyncTeX from an unaccepted parameter command keeps the parameter source li
   const { host, errors } = await setup(page, original);
   await enter(page); await page.locator('.omt-macro-tools button').click();
   await end(page, '.omt-macro-arg math-field');
-  await page.keyboard.type('\\'); await expect(page.locator('.omt-math-buffer input')).toBeFocused();
+  await page.keyboard.type('\\'); await expect(page.locator('math-field.omt-math-command')).toBeFocused();
   await page.keyboard.type('fr'); await page.keyboard.press('Control+Alt+j');
   await expect.poll(async () => (await posted(page)).some(message => message.t === 'synctex')).toBe(true);
   expect(host.text).toBe(original);
@@ -71,10 +71,10 @@ for (const [key, action] of [['Control+s', 'save'], ['Control+Alt+b', 'build'], 
   test(`${key} rolls back an unaccepted math command before ${action}`, async ({ page }) => {
     const original = 'Text $x$'; const { host, errors } = await setup(page, original);
     await enter(page); await end(page); await page.keyboard.type('\\');
-    await expect(page.locator('.omt-math-buffer input')).toBeFocused(); await page.keyboard.type('fr');
+    await expect(page.locator('math-field.omt-math-command')).toBeFocused(); await page.keyboard.type('fr');
     await page.keyboard.press(key);
     await expect.poll(async () => (await posted(page)).some(message => message.t === action)).toBe(true);
-    await expect(page.locator('.omt-math-buffer')).toHaveCount(0);
+    await expect(page.locator('math-field.omt-math-command')).toHaveCount(0);
     expect(host.text).toBe(original); expect(errors).toEqual([]);
   });
 }

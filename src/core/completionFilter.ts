@@ -5,14 +5,32 @@ export interface FilterableCompletion {
   preselect?: boolean;
 }
 
-function normalized(value: string): string { return value.replace(/^\\/, '').toLowerCase(); }
+function withoutSlash(value: string): string { return value.replace(/^\\/, ''); }
+
+/** A control sequence after an unescaped backslash, including the initial slash. */
+export function isLatexCommandPrefix(before: string): boolean {
+  const command = /\\[A-Za-z@]*$/.exec(before);
+  if (!command) { return false; }
+  let preceding = 0;
+  for (let at = command.index - 1; at >= 0 && before[at] === '\\'; at--) { preceding++; }
+  return preceding % 2 === 0;
+}
+
+/** VS Code's Text kind is a document-word suggestion, not a LaTeX command. */
+export function isWordCompletion(item: { source?: string; kind?: number }): boolean {
+  return item.source === 'word' || item.kind === 0 && (!item.source || item.source === 'provider');
+}
 
 /** Higher scores favor exact matches, then prefixes, then compact subsequences. */
 export function completionScore(query: string, candidate: string): number | null {
-  const needle = normalized(query), haystack = normalized(candidate);
+  const rawNeedle = withoutSlash(query), rawHaystack = withoutSlash(candidate);
+  const needle = rawNeedle.toLowerCase(), haystack = rawHaystack.toLowerCase();
   if (!needle) { return 0; }
-  if (needle === haystack) { return 10000; }
-  if (haystack.startsWith(needle)) { return 8000 + Math.min(needle.length, 99) * 10 - Math.min(haystack.length - needle.length, 999); }
+  // TeX commands are case-sensitive. Keep forgiving recall while putting the
+  // spelling the user actually typed ahead of differently cased commands.
+  const caseBonus = rawHaystack.startsWith(rawNeedle) ? 100 : 0;
+  if (needle === haystack) { return 10000 + caseBonus; }
+  if (haystack.startsWith(needle)) { return 8000 + Math.min(needle.length, 99) * 10 - Math.min(haystack.length - needle.length, 999) + caseBonus; }
   let at = 0, first = -1, previous = -1, score = 0;
   for (const char of needle) {
     const found = haystack.indexOf(char, at);

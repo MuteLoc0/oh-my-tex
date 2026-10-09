@@ -223,7 +223,7 @@ test('source macro hot updates refresh parameter completion even when renderMacr
   });
   await expect(argument).toBeFocused();
   await page.keyboard.type('\\');
-  await expect(page.locator('.omt-math-buffer input')).toBeVisible();
+  await expect(page.locator('math-field.omt-math-command')).toBeVisible();
   await page.keyboard.type('fo');
   await expect(page.locator('.omt-completion-item')).toContainText('\\foo');
   await page.keyboard.press('Enter');

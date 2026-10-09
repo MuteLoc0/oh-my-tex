@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { CompletionItemDTO } from '../../src/shared/protocol.ts';
 import { MockHost, type MockHostOptions } from './host.ts';
+import { projectMacroSnippet } from '../../src/core/macroCompletion.ts';
 
 /** A provider item whose offsets use the same LF document coordinates as the real bridge. */
 function item(label: string, value: string, from: number, to: number, options: Partial<CompletionItemDTO> = {}): CompletionItemDTO {
@@ -485,3 +486,40 @@ test('Tab-only completion leaves Enter as a newline and accepts Tab after a live
   await expect(page.locator('.omt-completion')).toBeHidden();
   expect(errors).toEqual([]);
 });
+
+for (const mode of ['visual', 'source']) {
+  test(`indexed custom macros accept Tab and navigate arguments in ${mode} mode`, async ({ page }) => {
+    const macros = [{ name: 'R', arity: 0, body: '\\mathbb{R}' }, { name: 'duo', arity: 2, body: '#1+#2' }];
+    const { host, errors } = await setup(page, '$a$\n', {
+      settings: { completionAcceptOnEnter: false },
+      completion: (request, current) => {
+        const from = current.text.lastIndexOf('\\', request.at - 1) + 1;
+        return { items: macros.map((macro, i) => item(`\\${macro.name}`, projectMacroSnippet(macro, true), from, request.at, {
+          i, filterText: macro.name, source: 'macro', insert: { snippet: true, value: projectMacroSnippet(macro, true) },
+        })) };
+      },
+    });
+    if (mode === 'source') { await host.toggleSource(); }
+    await page.evaluate(() => (window as unknown as { __omt: EditorHooks }).__omt.setCaret(4));
+    await page.keyboard.type('\\R');
+    await invoke(page);
+    await expect(page.locator('.omt-completion-item[aria-selected="true"] .omt-completion-label')).toHaveText('\\R');
+    await page.keyboard.press('Tab');
+    await host.flush();
+    expect(host.text).toBe('$a$\n\\R');
+    await expect(page.locator('.cm-content')).toBeFocused();
+
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('\\du');
+    await invoke(page);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('x');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('y');
+    await page.keyboard.press('Tab');
+    await host.flush();
+    expect(host.text).toBe('$a$\n\\R\n\\duo{x}{y}');
+    expect(await editorCaret(page)).toBe(host.text.length);
+    expect(errors).toEqual([]);
+  });
+}

@@ -144,6 +144,124 @@ export function replayMathInput(element: HTMLElement, buffered: BufferedMathInpu
   }
 }
 
+export interface InlineMathCommand {
+  text(): string;
+  selectionKey(): string;
+  atEnd(): boolean;
+  selectAll(): void;
+  restore(): void;
+  dispose(): void;
+}
+
+const inlineCommands = new WeakSet<MathfieldElement>();
+
+/** A native LaTeX group keeps command editing and its caret inside the formula. */
+export function startInlineMathCommand(element: HTMLElement, prefix: string, events: {
+  input(): void;
+  keydown(event: KeyboardEvent): void;
+  composition(active: boolean): void;
+  blur(): void;
+  leave(): void;
+}): InlineMathCommand | undefined {
+  if (!(element instanceof MathfieldElement)) { return; }
+  const field = element, controller = new AbortController(), { signal } = controller;
+  const value = field.getValue('latex'), selection = field.selection, mode = field.mode;
+  let suffix = 0;
+  let initialising = true, composing = false, compositionRange: [number, number] | undefined, latest = prefix;
+  let from = 0;
+  const text = () => {
+    if (field.mode === 'latex') { latest = field.getValue(from, Math.max(from, field.lastOffset - suffix - 1), 'latex'); }
+    return latest;
+  };
+  inlineCommands.add(field);
+  const owns = (event: Event) => event.composedPath().includes(field);
+  const on = (name: string, listener: EventListener) => field.addEventListener(name, listener, { signal });
+  field.addEventListener('keydown', event => { if (!composing) { events.keydown(event); } }, { capture: true, signal });
+  on('input', () => { if (!initialising && !composing) { text(); events.input(); } });
+  on('selection-change', () => {
+    if (initialising || composing) { return; }
+    // MathLive's input notification is deferred, but selection-change is
+    // synchronous. Capture the final brace before native parsing removes this
+    // group and changes all offsets.
+    if (field.mode === 'latex') { text(); }
+    else { events.leave(); }
+  });
+  on('blur', () => events.blur());
+  // Handle composition before the normal math/text IME adapter. A command is
+  // literal LaTeX, so intermediate input must stay in this native LaTeX group.
+  document.addEventListener('compositionstart', event => {
+    if (!owns(event)) { return; }
+    composing = true; compositionRange = [...field.selection.ranges[0]!] as [number, number];
+    events.composition(true); event.stopImmediatePropagation();
+  }, { capture: true, signal });
+  const compose = (text: string) => {
+    if (!compositionRange) { return; }
+    field.selection = { ranges: [compositionRange] };
+    const start = Math.min(...compositionRange);
+    field.insert(text, { mode: 'latex', format: 'latex', silenceNotifications: true, selectionMode: 'after' });
+    compositionRange = [start, field.position];
+    events.input();
+  };
+  document.addEventListener('compositionupdate', event => {
+    if (!owns(event) || !composing) { return; }
+    compose(event.data); event.stopImmediatePropagation();
+  }, { capture: true, signal });
+  document.addEventListener('compositionend', event => {
+    if (!owns(event) || !composing) { return; }
+    compose(event.data); composing = false; compositionRange = undefined;
+    const sink = field.shadowRoot?.querySelector<HTMLElement>('[part="keyboard-sink"]');
+    if (sink) { sink.textContent = ''; }
+    events.composition(false); event.stopImmediatePropagation();
+  }, { capture: true, signal });
+  document.addEventListener('beforeinput', event => {
+    if (!owns(event) || !composing) { return; }
+    if (event.data !== null) { compose(event.data); }
+    event.preventDefault(); event.stopImmediatePropagation();
+  }, { capture: true, signal });
+  document.addEventListener('input', event => {
+    if (owns(event) && composing) { event.stopImmediatePropagation(); }
+  }, { capture: true, signal });
+  document.addEventListener('keydown', event => {
+    if (owns(event) && (composing || event.isComposing)) { event.stopImmediatePropagation(); }
+  }, { capture: true, signal });
+  // Replace the saved selection only in the temporary visual model. The source
+  // owner retains that original selection until acceptance or cancellation.
+  if (!field.selectionIsCollapsed) {
+    field.insert('', { mode: 'math', format: 'latex', silenceNotifications: true, selectionMode: 'after' });
+  }
+  // Deleting a structural selection can also remove its fraction/array group.
+  // Count the surviving suffix after deletion rather than in the saved model.
+  suffix = field.lastOffset - field.position;
+  field.mode = 'latex';
+  from = field.position;
+  if (prefix) { field.insert(prefix, { mode: 'latex', format: 'latex', silenceNotifications: true, selectionMode: 'after' }); }
+  field.classList.add('omt-math-command');
+  initialising = false;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) { return; }
+    disposed = true; controller.abort(); inlineCommands.delete(field); field.classList.remove('omt-math-command');
+    if (composing) {
+      composing = false;
+      field.dispatchEvent(new CustomEvent('omt-composition-cancel', { bubbles: true, composed: true }));
+    }
+  };
+  return {
+    text,
+    selectionKey: () => JSON.stringify(field.selection),
+    atEnd: () => field.selectionIsCollapsed && field.position === field.lastOffset - suffix - 1,
+    selectAll: () => { field.selection = { ranges: [[from, Math.max(from, field.lastOffset - suffix - 1)]] }; },
+    restore: () => {
+      initialising = true;
+      field.mode = mode;
+      field.setValue(value, { silenceNotifications: true, mode: 'math' });
+      field.selection = selection;
+      initialising = false;
+    },
+    dispose,
+  };
+}
+
 export interface LiveField {
   element: HTMLElement;
   value(): string;
@@ -152,6 +270,7 @@ export interface LiveField {
   set(latex: string): void;
   setMacros(macros: MacroDictionary): void;
   focus(): void;
+  reveal(): void;
   hasTemplatePrompts(): boolean;
   selectAll(): void;
   placeAfterIsland(token: string): void;
@@ -172,6 +291,45 @@ export interface LiveField {
 const SHORTCUTS = { '->': '\\to', '>=': '\\ge', '<=': '\\le', '!=': '\\ne', '+-': '\\pm', '...': '\\ldots' };
 let cursorProbe: MathfieldElement | undefined;
 
+/** Reveal the caret in our own scroller, without scrolling the Webview's ancestors. */
+function containFieldScrolling(field: MathfieldElement, signal: AbortSignal): void {
+  let frame = 0;
+  const delta = (start: number, end: number, low: number, high: number) => {
+    // An oversized atom already spanning the viewport cannot be fully revealed.
+    if (start <= low && end >= high) { return 0; }
+    return start < low ? start - low : end > high ? end - high : 0;
+  };
+  field.onScrollIntoView = () => {
+    cancelAnimationFrame(frame);
+    const scroller = field.closest<HTMLElement>('.cm-scroller, .omt-macro-args');
+    if (!scroller) { return; }
+    const scrollTop = scroller.scrollTop, scrollLeft = scroller.scrollLeft;
+    // MathLive requests scrolling before rendering the newly inserted atom.
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (signal.aborted || !field.isConnected || !field.hasFocus()) { return; }
+      // Respect scrolling that occurred after the input requested this reveal.
+      if (scroller.scrollTop !== scrollTop || scroller.scrollLeft !== scrollLeft) { return; }
+      const viewport = scroller.getBoundingClientRect();
+      const top = viewport.top + scroller.clientTop, left = viewport.left + scroller.clientLeft;
+      const fieldBounds = field.getBoundingClientRect();
+      // A fully visible field needs no outer scrolling, even if atom bounds lag.
+      if (fieldBounds.top >= top && fieldBounds.bottom <= top + scroller.clientHeight &&
+          fieldBounds.left >= left && fieldBounds.right <= left + scroller.clientWidth) { return; }
+      const bounds = field.getElementInfo(field.position)?.bounds;
+      const caret = bounds ?? fieldBounds;
+      // Missing atom bounds must not pull a partly visible, tall field into view.
+      if (!bounds && caret.bottom > top && caret.top < top + scroller.clientHeight &&
+          caret.right > left && caret.left < left + scroller.clientWidth) { return; }
+      const dy = delta(caret.top, caret.bottom, top, top + scroller.clientHeight);
+      const dx = delta(caret.left, caret.right, left, left + scroller.clientWidth);
+      if (dy) { scroller.scrollTop += dy; }
+      if (dx) { scroller.scrollLeft += dx; }
+    });
+  };
+  signal.addEventListener('abort', () => cancelAnimationFrame(frame), { once: true });
+}
+
 export function createField(parent: HTMLElement, display: boolean, macros: MacroDictionary, inlineShortcuts: boolean, events: FieldEvents, overrides?: Record<string, string>): LiveField {
   const field = new MathfieldElement();
   const abort = new AbortController();
@@ -181,6 +339,7 @@ export function createField(parent: HTMLElement, display: boolean, macros: Macro
   field.popoverPolicy = 'off';
   field.smartFence = false;
   field.menuItems = [];
+  containFieldScrolling(field, abort.signal);
   const shortcuts = (enabled: boolean, custom?: Record<string, string>) => { field.inlineShortcuts = enabled ? { ...SHORTCUTS, ...custom } : {}; };
   shortcuts(inlineShortcuts, overrides);
   field.macros = { ...defaultMacros(), ...macros } as never;
@@ -223,6 +382,7 @@ export function createField(parent: HTMLElement, display: boolean, macros: Macro
     if (key === 'Escape') { event.preventDefault(); event.stopPropagation(); events.escape(); }
   });
   field.addEventListener('keydown', event => {
+    if (inlineCommands.has(field)) { return; }
     if (event.key === 'ArrowRight' && event.metaKey && !event.shiftKey && insideEnvironment()) {
       event.preventDefault(); event.stopImmediatePropagation(); placeAt('end'); return;
     }
@@ -238,7 +398,7 @@ export function createField(parent: HTMLElement, display: boolean, macros: Macro
   // IME and accessibility input can insert text without a keydown.
   field.addEventListener('beforeinput', event => {
     const input = event as InputEvent;
-    if (input.data === '\\' && events.complete) { input.preventDefault(); input.stopImmediatePropagation(); events.complete('\\'); }
+    if (input.data === '\\' && events.complete && !inlineCommands.has(field)) { input.preventDefault(); input.stopImmediatePropagation(); events.complete('\\'); }
   }, { capture: true, signal: abort.signal });
   for (const name of ['copy', 'cut']) {
     field.addEventListener(name, event => { events.copy(name === 'cut', event as ClipboardEvent); }, { capture: true, signal: abort.signal });
@@ -279,6 +439,7 @@ export function createField(parent: HTMLElement, display: boolean, macros: Macro
       field.dispatchEvent(new CustomEvent('omt-focus-request', { bubbles: true, composed: true }));
       field.focus();
     },
+    reveal: () => { field.executeCommand('scrollIntoView'); },
     // Read the model synchronously: rendered prompt elements can lag behind
     // the keystroke which filled the preceding template slot.
     hasTemplatePrompts: () => field.getPrompts({ locked: false }).length > 0 || /\\placeholder(?![a-zA-Z])/.test(field.getValue('latex')),

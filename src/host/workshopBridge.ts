@@ -38,13 +38,14 @@ export class WorkshopBridge {
   isSaving(document: vscode.TextDocument) { return this.building || this.saving.has(document.uri.toString()); }
   hasFlushedSave(document: vscode.TextDocument) { return this.saving.has(document.uri.toString()); }
 
-  /** Selection events may arrive after showTextDocument resolves. Consume our
-   * own event as well as events occurring inside the positioning operation. */
+  /** Selection events may arrive repeatedly after showTextDocument resolves. */
   ignoresSelection(event: vscode.TextEditorSelectionChangeEvent): boolean {
     const own = this.positioned.get(event.textEditor), selection = event.selections[0];
+    const user = event.kind === vscode.TextEditorSelectionChangeKind.Keyboard || event.kind === vscode.TextEditorSelectionChangeKind.Mouse;
+    if (!user && own && selection && own.version === event.textEditor.document.version
+      && selection.anchor.isEqual(own.selection.anchor) && selection.active.isEqual(own.selection.active)) { return true; }
     this.positioned.delete(event.textEditor);
-    return this.positioning || !!(own && selection && own.version === event.textEditor.document.version
-      && selection.anchor.isEqual(own.selection.anchor) && selection.active.isEqual(own.selection.active));
+    return this.positioning;
   }
 
   openNative(document: vscode.TextDocument, selection: vscode.Selection | undefined, panel: vscode.WebviewPanel) {

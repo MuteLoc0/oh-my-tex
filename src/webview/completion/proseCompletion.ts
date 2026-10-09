@@ -3,7 +3,8 @@ import { EditorView, keymap, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import type { CompletionItemDTO, HostMessage, WebMessage } from '../../shared/protocol.ts';
 import type { EditorSettings } from '../../shared/types.ts';
-import { completionScore } from '../../core/completionFilter.ts';
+import { completionScore, isLatexCommandPrefix, isWordCompletion } from '../../core/completionFilter.ts';
+import { environmentBody, withEnvironmentSelection } from '../../core/environmentCompletion.ts';
 import { parseSnippet } from '../../core/snippet.ts';
 import { editKind, remoteEdit } from '../editor/annotations.ts';
 import { activeFormulaRange } from '../editor/formulas.ts';
@@ -27,15 +28,17 @@ export class ProseCompletion {
   private requestState?: Request;
   private listed: CompletionItemDTO[] = [];
   private selected = 0;
+  private selectionExplicit = false;
   private generation = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private accepting = false;
+  private selectedCommand?: { text: string; from: number; to: number };
   private sync: SyncClient;
   private post: (message: WebMessage) => void;
   private readonly resolver: CompletionResolver;
   constructor(sync: SyncClient, post: (message: WebMessage) => void) { this.sync = sync; this.post = post; this.resolver = new CompletionResolver(sync, post); }
   attach(view: EditorView) {
-    this.view = view; this.popup = new CompletionPopup(view, index => { this.resolver.cancel(); this.selected = index; this.accept(); });
+    this.view = view; this.popup = new CompletionPopup(view, index => { this.resolver.cancel(); this.selected = index; this.selectionExplicit = true; this.accept(); });
     view.contentDOM.addEventListener('blur', () => this.close());
     view.scrollDOM.addEventListener('scroll', () => this.render());
   }
@@ -71,6 +74,7 @@ export class ProseCompletion {
       if (head !== at || !/^[\\\w@:-]*$/.test(current) || !update.state.selection.main.empty) { this.close(); }
       else { this.filter(); }
     } else if (update.selectionSet && !update.docChanged) { this.close(); }
+    this.trackSelectedCommand(update);
     if (!update.docChanged || !this.view?.hasFocus || !this.settings) { return; }
     const typing = update.transactions.some(tr => tr.isUserEvent('input.type') || tr.isUserEvent('delete.backward'));
     if (!typing) { return; }
@@ -88,6 +92,33 @@ export class ProseCompletion {
     else if (trigger) { this.schedule({ kind: 'char', char: last }); }
     else if (!this.requestState && quick && /[\w@]$/.test(before)) { this.schedule({ kind: 'invoke' }); }
   }
+  /** Typing a command replaces a selection before its environment is chosen. */
+  private trackSelectedCommand(update: ViewUpdate) {
+    for (const tr of update.transactions) {
+      let pending = this.selectedCommand;
+      if (pending && tr.docChanged) {
+        let inside = tr.isUserEvent('input.type') || tr.isUserEvent('delete.backward') || tr.isUserEvent('delete.forward');
+        tr.changes.iterChangedRanges((from, to) => { if (from < pending!.from || to > pending!.to) { inside = false; } });
+        pending = inside ? { ...pending, from: tr.changes.mapPos(pending.from, -1), to: tr.changes.mapPos(pending.to, 1) } : undefined;
+      }
+      if (pending && (!tr.newSelection.main.empty || tr.newSelection.main.head !== pending.to
+        || !/^\\[A-Za-z@]*$/.test(tr.newDoc.sliceString(pending.from, pending.to)))) { pending = undefined; }
+      if (!pending && tr.docChanged && tr.isUserEvent('input.type') && tr.startState.selection.ranges.length === 1) {
+        const selection = tr.startState.selection.main;
+        let replacement: { from: number; to: number; value: string } | undefined, count = 0;
+        tr.changes.iterChanges((from, to, fromNew, toNew, inserted) => {
+          count++;
+          if (!selection.empty && from === selection.from && to === selection.to && /^\\[A-Za-z@]*$/.test(inserted.toString())) {
+            replacement = { from: fromNew, to: toNew, value: inserted.toString() };
+          }
+        });
+        if (count === 1 && replacement && tr.newSelection.main.empty && tr.newSelection.main.head === replacement.to) {
+          pending = { text: tr.startState.sliceDoc(selection.from, selection.to), from: replacement.from, to: replacement.to };
+        }
+      }
+      this.selectedCommand = pending;
+    }
+  }
   private schedule(trigger: Trigger) {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => { this.timer = undefined; void this.request(trigger); }, this.settings?.quickSuggestionsDelay ?? 100);
@@ -102,7 +133,7 @@ export class ProseCompletion {
     const view = this.view;
     if (generation !== this.generation || !view?.hasFocus || view.composing || this.sync.composing || activeFormulaRange() || !this.sync.matches(view.state)) { return; }
     const at = view.state.selection.main.head;
-    this.listed = []; this.selected = 0; this.popup?.hide();
+    this.listed = []; this.selected = 0; this.selectionExplicit = false; this.popup?.hide();
     this.requestState = { req: `prose-${++requestNumber}`, version: this.sync.version, at, doc: view.state.doc, changes: ChangeSet.empty(view.state.doc.length), retry };
     this.post({ t: 'complete', req: this.requestState.req, version: this.sync.version, at, trigger, ctx: 'prose' });
   }
@@ -128,12 +159,14 @@ export class ProseCompletion {
   private filter() {
     const view = this.view, request = this.requestState;
     if (!view || !request?.items) { return; }
-    const old = this.listed[this.selected]?.i;
+    const old = this.selectionExplicit ? this.listed[this.selected]?.i : undefined;
     const head = view.state.selection.main.head;
+    const commandContext = isLatexCommandPrefix(view.state.doc.sliceString(view.state.doc.lineAt(head).from, head));
     const mapped = request.items.filter(i => [i.range.insFrom, i.range.insTo, i.range.repFrom, i.range.repTo, ...(i.extraEdits?.flatMap(e => [e.from, e.to]) ?? [])].every(p => p >= 0 && p <= request.doc.length))
       .map(i => this.mapItem(i, request));
     // Each provider may choose a different replacement start (Workshop excludes the backslash).
     const candidates = mapped.flatMap((item, index) => {
+      if (commandContext && isWordCompletion(item)) { return []; }
       const score = item.range.insFrom <= head ? completionScore(view.state.doc.sliceString(item.range.insFrom, head), item.filterText ?? item.label) : null;
       return score === null ? [] : [{ item, index, score }];
     });
@@ -141,13 +174,13 @@ export class ProseCompletion {
       || (a.item.sortText ?? a.item.label).localeCompare(b.item.sortText ?? b.item.label) || a.index - b.index);
     this.listed = candidates.slice(0, 300).map(c => c.item);
     this.selected = Math.max(0, this.listed.findIndex(i => i.i === old));
-    if (old === undefined) { const preselect = this.listed.findIndex(i => i.preselect); if (preselect >= 0) { this.selected = preselect; } }
     this.render();
   }
   private render() { if (this.view) { this.popup?.show(this.listed, this.selected, this.view.state.selection.main.head); } }
   private move(delta: number) {
     if (!this.listed.length) { return false; }
     this.resolver.cancel();
+    this.selectionExplicit = true;
     this.selected = (this.selected + delta + this.listed.length) % this.listed.length; this.render(); return true;
   }
   private variables(from: number, to: number): Record<string, string> {
@@ -181,9 +214,20 @@ export class ProseCompletion {
         });
       return true;
     }
-    const from = this.settings?.suggestReplace ? item.range.repFrom : item.range.insFrom;
+    let from = this.settings?.suggestReplace ? item.range.repFrom : item.range.insFrom;
     const to = this.settings?.suggestReplace ? item.range.repTo : item.range.insTo;
-    const parsed = item.insert.snippet ? parseSnippet(item.insert.value, this.variables(from, to)) : { text: item.insert.value, tabstops: [] };
+    const variables = this.variables(from, to);
+    let parsed = item.insert.snippet ? parseSnippet(item.insert.value, variables) : { text: item.insert.value, tabstops: [] };
+    const saved = this.selectedCommand;
+    if (saved && from >= saved.from && from <= saved.from + 1 && to === saved.to && environmentBody(parsed.text)) {
+      // Workshop snippets use TM_SELECTED_TEXT; other environment providers
+      // expose an empty content tabstop instead. Support both without duplicates.
+      if (/\$(?:TM_SELECTED_TEXT\b|\{TM_SELECTED_TEXT[}:\/])/.test(item.insert.value)) {
+        variables.TM_SELECTED_TEXT = saved.text;
+        parsed = parseSnippet(item.insert.value, variables);
+      } else { parsed = withEnvironmentSelection(parsed, saved.text); }
+      if (from === saved.from + 1 && parsed.text.trimStart().startsWith('\\begin{')) { from = saved.from; }
+    }
     const primary = { from, to, insert: parsed.text };
     const edits = [primary, ...(item.extraEdits ?? [])].sort((a, b) => a.from - b.from || a.to - b.to);
     if (edits.some((e, i) => e.from < 0 || e.to < e.from || e.to > view.state.doc.length
@@ -204,6 +248,6 @@ export class ProseCompletion {
   close() {
     this.resolver.cancel();
     if (this.requestState) { this.post({ t: 'cancelCompletion', req: this.requestState.req }); }
-    clearTimeout(this.timer); this.timer = undefined; this.generation++; this.requestState = undefined; this.listed = []; this.selected = 0; this.popup?.hide();
+    clearTimeout(this.timer); this.timer = undefined; this.generation++; this.requestState = undefined; this.listed = []; this.selected = 0; this.selectionExplicit = false; this.selectedCommand = undefined; this.popup?.hide();
   }
 }

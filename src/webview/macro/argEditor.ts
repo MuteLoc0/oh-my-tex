@@ -45,7 +45,7 @@ export class MacroArgEditor {
     document.addEventListener('scroll', () => this.position(), { capture: true, signal: this.abort.signal });
     document.addEventListener('pointerdown', event => {
       const target = event.target as Node;
-      if (!this.element.contains(target) && !(target instanceof Element && target.closest('.omt-completion, .omt-math-buffer, .omt-macro-tools'))) { this.close(false); }
+      if (!this.element.contains(target) && !(target instanceof Element && target.closest('.omt-completion, .omt-macro-tools'))) { this.close(false); }
     }, { signal: this.abort.signal });
     this.element.addEventListener('keydown', event => {
       if (event.key === 'Tab' && !event.isComposing && !this.host.completion?.active && !event.altKey && !event.ctrlKey && !event.metaKey) {

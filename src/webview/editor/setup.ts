@@ -1,5 +1,5 @@
 import { Compartment, EditorState, type Extension } from '@codemirror/state';
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection, ViewPlugin } from '@codemirror/view';
+import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection, scrollPastEnd, ViewPlugin } from '@codemirror/view';
 import { defaultKeymap, indentWithTab, insertTab } from '@codemirror/commands';
 import { bracketMatching, HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
 import { getSearchQuery, highlightSelectionMatches, search, searchKeymap, SearchQuery, setSearchQuery } from '@codemirror/search';
@@ -37,6 +37,9 @@ export function applySettingsAppearance(config: EditorSettings): void {
 export function baseExtensions(extra: Extension[]): Extension[] {
   return [
     EditorState.lineSeparator.of('\n'),
+    // Reserve viewport-sized space below the document in visual and source modes.
+    // CodeMirror updates the padding when the editor or its panels change size.
+    scrollPastEnd(),
     lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), drawSelection(), rectangularSelection(),
     highlightActiveLine(), bracketMatching(), highlightSelectionMatches(), search({ top: true }), searchInput,
     // drawSelection paints behind the lines. An opaque VS Code current-line

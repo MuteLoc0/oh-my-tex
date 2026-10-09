@@ -6,8 +6,9 @@ import { completionScore } from '../../core/completionFilter.ts';
 import { isMathCompletion } from '../../core/mathCompletionFilter.ts';
 import { snippetToMathTemplate } from '../../core/mathSnippet.ts';
 import { parseSnippet } from '../../core/snippet.ts';
+import { tokenize } from '../../core/lexer.ts';
 import { editKind } from '../editor/annotations.ts';
-import { replayMathInput, type BufferedMathInput } from '../formula/mathlive.ts';
+import { replayMathInput, startInlineMathCommand, type InlineMathCommand, type BufferedMathInput } from '../formula/mathlive.ts';
 import type { SyncClient } from '../sync.ts';
 import { CompletionPopup } from './popup.ts';
 import { CompletionResolver } from './resolve.ts';
@@ -35,8 +36,10 @@ export class MathCompletion {
   private popup!: CompletionPopup;
   private settings?: EditorSettings;
   private target?: MathCompletionTarget;
-  private chip = document.createElement('span');
-  private input = document.createElement('input');
+  private command?: InlineMathCommand;
+  private prefix = '';
+  private selectedLatex = '';
+  private selectionExplicit = false;
   private range = { from: 0, to: 0 };
   private rollback?: ChangeSet;
   private requestState?: Request;
@@ -57,45 +60,6 @@ export class MathCompletion {
 
   constructor(sync: SyncClient, post: (message: WebMessage) => void) {
     this.sync = sync; this.post = post; this.resolver = new CompletionResolver(sync, post);
-    this.chip.className = 'omt-math-buffer'; this.chip.append(this.input);
-    this.input.type = 'text'; this.input.setAttribute('aria-label', 'Math command completion');
-    this.input.autocomplete = 'off'; this.input.spellcheck = false;
-    this.input.addEventListener('input', event => {
-      if (!this.target) { return; }
-      this.resolver.cancel();
-      // Completion is a command buffer; composition commits before querying providers.
-      this.editing = true;
-      try { this.range = this.target.buffer(this.input.value); } finally { this.editing = false; }
-      this.filter();
-      if ((event as InputEvent).isComposing) { return; }
-      if (this.requestState?.incomplete) { this.schedule({ kind: 'incomplete' }); }
-      else if (!this.requestState) { this.schedule({ kind: 'invoke' }); }
-    });
-    this.input.addEventListener('select', () => this.resolver.cancel());
-    this.input.addEventListener('compositionstart', () => { this.resolver.cancel(); this.composing = true; clearTimeout(this.timer); });
-    this.input.addEventListener('compositionend', () => { this.composing = false; this.schedule({ kind: 'invoke' }); });
-    this.input.addEventListener('keydown', event => {
-      if (event.isComposing) { return; }
-      if (event.key !== 'Enter' && event.key !== 'Tab') { this.resolver.cancel(); }
-      let handled = true;
-      if (event.key === 'Escape') { this.cancel(); }
-      else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        if (this.listed.length) { this.selected = (this.selected + (event.key === 'ArrowDown' ? 1 : -1) + this.listed.length) % this.listed.length; this.render(); }
-      } else if (event.key === 'Enter' && !this.settings?.completionAcceptOnEnter) {
-        // The command buffer is a temporary input, so returning false here
-        // would strand Enter in that input rather than reach MathLive.
-        const target = this.target;
-        this.cancel(false);
-        if (target) { this.handoff({ kind: 'key', key: {
-          key: event.key, code: event.code, location: event.location, repeat: event.repeat,
-          ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey,
-        } }).focus(target); }
-      } else if (event.key === 'Enter' || event.key === 'Tab') { this.accept(); }
-      else if (event.ctrlKey && event.code === 'Space') { void this.request({ kind: 'invoke' }); }
-      else { handled = false; }
-      if (handled) { event.preventDefault(); event.stopImmediatePropagation(); }
-    });
-    this.input.addEventListener('blur', () => queueMicrotask(() => { if (this.target && document.activeElement !== this.input) { this.cancel(false); } }));
     window.addEventListener('resize', () => this.render());
   }
   attach(view: EditorView) {
@@ -112,7 +76,7 @@ export class MathCompletion {
   }
   get active() { return Boolean(this.target); }
   get sourceCursor(): number | undefined { return this.target ? this.range.to : undefined; }
-  ownsFocus() { return document.activeElement === this.input; }
+  ownsFocus() { return Boolean(this.target && document.activeElement === this.target.element); }
   start(target: MathCompletionTarget, prefix: string) {
     if (!this.replayingHandoff && !this.continuingHandoff) { this.stopHandoff?.(); }
     this.cancel();
@@ -120,8 +84,18 @@ export class MathCompletion {
     this.target = target; this.rollback = undefined;
     this.editing = true;
     try { this.range = target.buffer(prefix); } finally { this.editing = false; }
-    this.input.value = prefix; document.body.append(this.chip); this.position();
-    this.input.focus(); this.input.setSelectionRange(prefix.length, prefix.length);
+    this.prefix = prefix; this.selectedLatex = target.selectedLatex();
+    this.command = startInlineMathCommand(target.element, prefix, {
+      input: () => this.commandInput(), keydown: event => this.commandKeydown(event),
+      composition: active => {
+        this.resolver.cancel(); this.composing = active; clearTimeout(this.timer);
+        if (!active) { this.schedule({ kind: 'invoke' }); }
+      },
+      blur: () => queueMicrotask(() => { if (this.target === target && !this.ownsFocus()) { this.cancel(false); } }),
+      leave: () => queueMicrotask(() => { if (this.target === target) { this.acceptTyped(); } }),
+    });
+    if (!this.command) { this.cancel(); return; }
+    if (!this.ownsFocus()) { this.focusTarget(target); }
     void this.request(prefix ? { kind: 'char', char: '\\' } : { kind: 'invoke' });
   }
   update(update: ViewUpdate) {
@@ -140,7 +114,7 @@ export class MathCompletion {
   private schedule(trigger: Trigger) {
     clearTimeout(this.timer);
     if (this.composing) { return; }
-    this.timer = setTimeout(() => { if (this.composing || !this.input.matches(':focus') || this.input.value.includes('\n')) { return; } void this.request(trigger); }, this.settings?.quickSuggestionsDelay ?? 10);
+    this.timer = setTimeout(() => { if (this.composing || !this.ownsFocus() || this.prefix.includes('\n')) { return; } void this.request(trigger); }, this.settings?.quickSuggestionsDelay ?? 10);
   }
   private async request(trigger: Trigger, retry = 0) {
     clearTimeout(this.timer);
@@ -168,7 +142,7 @@ export class MathCompletion {
   private filter() {
     const request = this.requestState, target = this.target;
     if (!target || !request?.items) { return; }
-    const old = this.listed[this.selected]?.i;
+    const old = this.selectionExplicit ? this.listed[this.selected]?.i : undefined;
     const mapped = request.items.filter(item => isMathCompletion(item, target.macros, this.settings?.mathCompletionAllowPatterns))
       .filter(item => [item.range.insFrom, item.range.insTo, item.range.repFrom, item.range.repTo, ...(item.extraEdits?.flatMap(e => [e.from, e.to]) ?? [])].every(p => p >= 0 && p <= request.doc.length))
       .map(item => {
@@ -188,29 +162,84 @@ export class MathCompletion {
     this.listed = candidates.slice(0, 300).map(c => c.item); this.selected = Math.max(0, this.listed.findIndex(i => i.i === old));
     this.render();
   }
-  private position() {
-    if (!this.target) { return; }
-    const b = this.target.anchor();
-    this.chip.style.left = `${Math.max(8, Math.min(b.left, window.innerWidth - 190))}px`;
-    this.chip.style.top = `${Math.max(4, Math.min(b.bottom, window.innerHeight - 32))}px`;
-    this.input.style.width = `${Math.max(5, Math.min(22, this.input.value.length + 2))}ch`;
+  private commandInput() {
+    if (!this.target || !this.command) { return; }
+    this.resolver.cancel(); this.prefix = this.command.text();
+    this.editing = true;
+    try {
+      // Provider coordinates use real source, whose formula scanner must remain
+      // balanced while an argument is still being typed in the native group.
+      let depth = 0;
+      for (const token of tokenize(this.prefix)) {
+        if (token.value === '{') { depth++; }
+        else if (token.value === '}') { depth = Math.max(0, depth - 1); }
+      }
+      const range = this.target.buffer(this.prefix + '}'.repeat(depth));
+      this.range = { from: range.from, to: range.to - depth };
+    } finally { this.editing = false; }
+    this.filter();
+    if (this.composing) { return; }
+    if (this.requestState?.incomplete) { this.schedule({ kind: 'incomplete' }); }
+    else if (!this.requestState) { this.schedule({ kind: 'invoke' }); }
+  }
+  private commandKeydown(event: KeyboardEvent) {
+    if (event.isComposing || this.composing) { return; }
+    if (event.key !== 'Enter' && event.key !== 'Tab') { this.resolver.cancel(); }
+    let handled = true;
+    if (event.key === 'Escape') { this.cancel(); }
+    else if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'a') { this.command?.selectAll(); }
+    else if (event.key === 'ArrowRight' && !event.shiftKey && !event.ctrlKey && !event.metaKey && this.command?.atEnd()) { this.acceptTyped(); }
+    else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (this.listed.length) {
+        this.selectionExplicit = true;
+        this.selected = (this.selected + (event.key === 'ArrowDown' ? 1 : -1) + this.listed.length) % this.listed.length;
+        this.render();
+      }
+    } else if (event.key === 'Enter' && !this.settings?.completionAcceptOnEnter) {
+      const target = this.target;
+      this.cancel(false);
+      if (target) { this.handoff({ kind: 'key', key: {
+        key: event.key, code: event.code, location: event.location, repeat: event.repeat,
+        ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey,
+      } }).focus(target); }
+    } else if (event.key === 'Enter' || event.key === 'Tab') { this.listed.length ? this.accept() : this.acceptTyped(); }
+    else if (event.ctrlKey && event.code === 'Space') { void this.request({ kind: 'invoke' }); }
+    else if (event.key === ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) { this.acceptTyped(); }
+    else { handled = false; }
+    if (handled) { event.preventDefault(); event.stopImmediatePropagation(); }
   }
   private render() {
     if (!this.target) { return; }
-    this.position();
-    this.popup.show(this.listed, this.selected, this.range.to, this.input.getBoundingClientRect(), this.input);
+    this.popup.show(this.listed, this.selected, this.range.to, this.target.anchor(), this.target.element);
+  }
+  /** Space or a completed native LaTeX group commits the exact command typed. */
+  private acceptTyped() {
+    const target = this.target;
+    if (!target || !this.command) { return; }
+    const latex = this.command.text();
+    if (!latex) { this.cancel(); return; }
+    this.command.restore(); this.command.dispose(); this.command = undefined;
+    this.editing = true;
+    let ok = false;
+    try { ok = target.accept(latex, undefined, [], latex); } finally { this.editing = false; }
+    if (!ok) { this.cancel(); return; }
+    this.clear(); this.focusTarget(target.acceptedTarget?.() ?? target);
+    void this.sync.flush();
   }
   private accept() {
+    // MathLive dispatches input on a timer. Enter/Tab can reach this handler
+    // before the last character has refreshed source coordinates and ranges.
+    if (this.command && this.command.text() !== this.prefix) { this.commandInput(); }
     const target = this.target, item = this.listed[this.selected], request = this.requestState;
     if (!target || !item || !request) { return; }
     if (item.needsResolve) {
       if (this.resolver.pending) { return; }
       clearTimeout(this.timer);
-      const at = this.range.to, generation = this.generation, selectionStart = this.input.selectionStart, selectionEnd = this.input.selectionEnd;
+      const at = this.range.to, generation = this.generation, selection = this.command?.selectionKey();
       this.resolver.start(request.req, item.i, this.view, at,
         () => this.target === target && this.requestState === request && this.generation === generation && this.ownsFocus()
           && !this.composing && this.range.to === at && this.listed[this.selected]?.i === item.i
-          && this.input.selectionStart === selectionStart && this.input.selectionEnd === selectionEnd,
+          && this.command?.selectionKey() === selection,
         (resolved, version) => {
           if (!resolved || resolved.needsResolve || !isMathCompletion(resolved, target.macros, this.settings?.mathCompletionAllowPatterns)) {
             this.post({ t: 'log', level: 'warn', message: 'Completion changed while resolving; choose it again.' });
@@ -224,10 +253,11 @@ export class MathCompletion {
     const from = this.settings?.suggestReplace ? item.range.repFrom : item.range.insFrom;
     const to = this.settings?.suggestReplace ? item.range.repTo : item.range.insTo;
     if (from < this.range.from || to > this.range.to || from > to) { this.cancel(); return; }
-    const body = this.input.value.slice(0, from - this.range.from) + item.insert.value + this.input.value.slice(to - this.range.from);
-    const variables = { TM_SELECTED_TEXT: target.selectedLatex() };
+    const body = this.prefix.slice(0, from - this.range.from) + item.insert.value + this.prefix.slice(to - this.range.from);
+    const variables = { TM_SELECTED_TEXT: this.selectedLatex };
     const template = item.insert.snippet ? snippetToMathTemplate(body, variables, `omt-${++counter}`) : { latex: body, firstPromptId: undefined };
     const sourceLatex = item.insert.snippet ? parseSnippet(body, variables).text : body;
+    this.command?.restore(); this.command?.dispose(); this.command = undefined;
     this.editing = true;
     let ok = false;
     try { ok = target.accept(template.latex, template.firstPromptId, item.extraEdits ?? [], sourceLatex); } finally { this.editing = false; }
@@ -243,7 +273,7 @@ export class MathCompletion {
       if (item.command === 'host') { this.post({ t: 'runItemCommand', req: request.req, item: item.i }); }
     });
   }
-  /** Capture only the gap between accepting a completion and genuine DOM focus. */
+  /** Capture only the gap between accepting a completion and genuine MathLive focus. */
   private handoff(initial?: BufferedMathInput) {
     this.stopHandoff?.();
     let finish = () => {};
@@ -278,13 +308,12 @@ export class MathCompletion {
         this.continuingHandoff = true;
         this.replayingHandoff = true;
         try {
-          if (destination === this.input) { this.replayChipInput(event); }
-          else { replayMathInput(destination, event); }
+          replayMathInput(destination, event);
         } finally { this.replayingHandoff = false; }
-        // A replayed backslash may synchronously open a completion chip. Tab,
+        // A replayed backslash may synchronously open an inline command. Tab,
         // Enter and Escape may request another field's asynchronous focus; its
         // focus-request event already changed destination, so pause here.
-        if (this.target && this.ownsFocus()) { destination = this.input; }
+        if (this.target && this.ownsFocus()) { destination = this.target.element; }
         // Navigation may defer disposal/focus to a microtask so MathLive can
         // finish its current key handler before the next record is replayed.
         queueMicrotask(() => {
@@ -330,7 +359,7 @@ export class MathCompletion {
         if (focused()) { deliver(); }
         // MathLive can briefly refocus the old sink while processing a Tab.
         // A requested new math field remains the destination until real focus.
-        else if (destination && document.activeElement !== document.body && document.activeElement !== this.input
+        else if (destination && document.activeElement !== document.body
           && document.activeElement?.tagName !== 'MATH-FIELD') { stop(); }
       });
     }, { capture: true, signal });
@@ -345,38 +374,11 @@ export class MathCompletion {
     this.focusHandoff = focus;
     return { focus };
   }
-  /** A replayed backslash can open a new chip before the remaining keys arrive. */
-  private replayChipInput(buffered: BufferedMathInput) {
-    let value: InputEventInit | undefined;
-    if (buffered.kind === 'key') {
-      const event = new KeyboardEvent('keydown', { ...buffered.key, bubbles: true, cancelable: true });
-      if (!this.input.dispatchEvent(event)) { return; }
-      value = buffered.input;
-      if (!value && !event.ctrlKey && !event.metaKey && [...event.key].length === 1) {
-        value = { data: event.key, inputType: 'insertText' };
-      }
-      if (!value && (event.key === 'Backspace' || event.key === 'Delete')) {
-        value = { inputType: event.key === 'Backspace' ? 'deleteContentBackward' : 'deleteContentForward' };
-      }
-      if (!value && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-        const from = this.input.selectionStart ?? 0, to = this.input.selectionEnd ?? from;
-        const position = event.key === 'Home' ? 0 : event.key === 'End' ? this.input.value.length
-          : event.key === 'ArrowLeft' ? Math.max(0, from - (from === to ? 1 : 0))
-          : Math.min(this.input.value.length, to + (from === to ? 1 : 0));
-        this.input.setSelectionRange(position, position);
-      }
-    } else { value = buffered.input; }
-    if (!value || !this.input.dispatchEvent(new InputEvent('beforeinput', { ...value, bubbles: true, cancelable: true }))) { return; }
-    let from = this.input.selectionStart ?? this.input.value.length, to = this.input.selectionEnd ?? from;
-    if (from === to && value.inputType === 'deleteContentBackward') { from = Math.max(0, from - 1); }
-    if (from === to && value.inputType === 'deleteContentForward') { to = Math.min(this.input.value.length, to + 1); }
-    this.input.setRangeText(value.data ?? '', from, to, 'end');
-    this.input.dispatchEvent(new InputEvent('input', { ...value, bubbles: true }));
-  }
   cancel(focus = true) {
     if (!this.replayingHandoff && !this.continuingHandoff) { this.stopHandoff?.(); }
     const target = this.target, rollback = this.rollback;
     if (!target) { return; }
+    this.command?.restore();
     this.clear();
     if (rollback && !rollback.empty) { this.view.dispatch({ changes: rollback, annotations: editKind.of('mathCompletionCancel') }); }
     target.end(); if (focus) { target.focus(); }
@@ -386,8 +388,7 @@ export class MathCompletion {
     if (this.requestState) { this.post({ t: 'cancelCompletion', req: this.requestState.req }); }
     if (!this.replayingHandoff && !this.continuingHandoff) { this.stopHandoff?.(); }
     this.generation++; clearTimeout(this.timer); this.requestState = undefined; this.target = undefined;
-    this.rollback = undefined; this.listed = []; this.selected = 0; this.popup.hide(); this.chip.remove();
+    this.rollback = undefined; this.listed = []; this.selected = 0; this.popup.hide(); this.command?.dispose(); this.command = undefined; this.prefix = ''; this.selectionExplicit = false;
     this.composing = false;
-    this.input.removeAttribute('aria-controls'); this.input.removeAttribute('aria-activedescendant');
   }
 }
