@@ -56,6 +56,11 @@ export function reconcile(source: string, before: string, after: string, canon: 
       let end = sb, replacement = insert;
       const islandDeletion = !insert ? deleteIslandTokens(source, sa, sb, separators) : undefined;
       if (islandDeletion) { end = islandDeletion.end; replacement = islandDeletion.trivia; }
+      // A projected control-word separator is not user whitespace. If new
+      // content is inserted before it, remove it instead of moving it after
+      // the new content, where restoreIslands can no longer identify it.
+      else if (insert && sa === sb && source[sa] === ' ' && /^[a-zA-Z]/.test(source.slice(sa + 1)) &&
+          st.some(token => token.to === sa && separators.has(token.value))) { end++; }
       // Ordinary deletions coalesce spaces; atomic island deletion preserves every source byte
       // around the call, removing only a separator the projection introduced before a letter.
       else if (!insert && /\s$/.test(source.slice(0, sa)) && /^[ \t]/.test(source.slice(end))) { end += source.slice(end).match(/^[ \t]+/)![0].length; }

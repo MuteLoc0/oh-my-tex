@@ -253,6 +253,10 @@ export function startInlineMathCommand(element: HTMLElement, prefix: string, eve
     selectAll: () => { field.selection = { ranges: [[from, Math.max(from, field.lastOffset - suffix - 1)]] }; },
     restore: () => {
       initialising = true;
+      // Reject only the temporary native group before restoring the saved
+      // model. Switching mode directly parses it and can leave an invalid
+      // caret for unsupported commands, or accept known commands twice.
+      if (field.mode === 'latex') { field.executeCommand(['complete', 'reject'] as never); }
       field.mode = mode;
       field.setValue(value, { silenceNotifications: true, mode: 'math' });
       field.selection = selection;
@@ -267,7 +271,8 @@ export interface LiveField {
   value(): string;
   hasErrors(): boolean;
   selectedLatex(): string;
-  set(latex: string): void;
+  /** Optional cursor is a LaTeX string offset, rather than a model atom offset. */
+  set(latex: string, cursor?: number): void;
   setMacros(macros: MacroDictionary): void;
   focus(): void;
   reveal(): void;
@@ -429,8 +434,29 @@ export function createField(parent: HTMLElement, display: boolean, macros: Macro
     value: () => serializeWithoutPlaceholders(ime.value() ?? field.getValue('latex-without-placeholders')),
     hasErrors: () => field.errors.length > 0,
     selectedLatex: () => serializeWithoutPlaceholders(field.getValue(field.selection, 'latex-without-placeholders')),
-    set: latex => {
+    set: (latex, cursor) => {
       const position = field.position;
+      if (cursor !== undefined) {
+        // Reloading source changes atom offsets. A temporary atomic marker puts
+        // the caret back in its actual fraction/array branch using public APIs.
+        const marker = '\\OMTInputCursor', macros = field.macros;
+        field.macros = { ...macros, OMTInputCursor: { def: 'x', args: 0, captureSelection: true, expand: false } };
+        field.setValue(latex.slice(0, cursor) + marker + ' ' + latex.slice(cursor), { silenceNotifications: true, mode: 'math' });
+        let found = false;
+        for (let offset = 1; offset <= field.lastOffset; offset++) {
+          const info = field.getElementInfo(offset);
+          if (info?.latex !== marker) { continue; }
+          // Macro expansion children occupy offsets too. Select the whole
+          // marker from its preceding sibling, rather than just its last child.
+          let before = offset - 1;
+          while (before > 0 && (field.getElementInfo(before)?.depth ?? 0) > (info.depth ?? 0)) { before--; }
+          field.selection = { ranges: [[before, offset]] };
+          field.insert('', { silenceNotifications: true, mode: 'math', format: 'latex', selectionMode: 'after' });
+          found = true; break;
+        }
+        field.macros = macros;
+        if (found) { return; }
+      }
       field.setValue(latex, { silenceNotifications: true, mode: 'math' } as never);
       field.position = Math.min(position, field.lastOffset);
     },

@@ -3,9 +3,9 @@ import { reconcile } from '../../core/writeback.ts';
 import type { Change, Patch } from '../../shared/types.ts';
 import type { FormulaSpan } from '../../core/formulaScanner.ts';
 import { Canonicalizer, createField, type LiveField } from '../formula/mathlive.ts';
-import { project, type MacroContext, type Projection } from '../formula/projection.ts';
+import { insertCommandSource, project, projectedOffset, type MacroContext, type Projection } from '../formula/projection.ts';
 import type { MathCompletion, MathCompletionTarget } from '../completion/mathCompletion.ts';
-import { sourceCursor } from '../formula/sourcePosition.ts';
+import { sourceCursor, stripCursorSeparator } from '../formula/sourcePosition.ts';
 import { completedMacroCall, isMacroCompletionSource } from '../../core/macroCompletion.ts';
 import { hasMathModeCJK } from '../../core/mathText.ts';
 
@@ -257,6 +257,7 @@ class ArgumentSession {
       begin: () => this.begin(), buffer: prefix => this.buffer(prefix),
       anchor: () => this.field.anchor(), selectedLatex: () => this.projection.restore(this.field.selectedLatex()) ?? '',
       accept: (latex, prompt, extras, sourceLatex) => this.accept(latex, prompt, extras, sourceLatex),
+      acceptTyped: latex => this.acceptTyped(latex),
       acceptedTarget: () => {
         const from = this.acceptedCallFrom; this.acceptedCallFrom = undefined;
         if (from !== undefined && editor.isOpen) { editor.open(from); }
@@ -297,8 +298,9 @@ class ArgumentSession {
     if (this.sourceView.includes(marker)) { return false; }
     const macros = { ...this.projection.macros, [marker.slice(1)]: { def: 'x', args: 0, expand: false, captureSelection: true } };
     const result = reconcile(this.sourceView, this.serial, this.field.markedValue(marker), value => this.editor.canonicalize({ ...this.projection, macros }, value), this.projection.islands);
-    const marked = this.projection.restore(result.view);
+    const restored = this.projection.restore(result.view);
     const arg = this.editor.argument(this.arg.index);
+    const marked = restored === undefined || !arg ? undefined : stripCursorSeparator(restored, marker, arg.value);
     if (!arg || marked === undefined || marked.split(marker).length !== 2) { return false; }
     this.bufferState = { marked, marker, original: arg.value };
     return true;
@@ -344,6 +346,22 @@ class ArgumentSession {
       this.projection = projection; this.sourceView = projection.view;
       this.field.setMacros(projection.macros); this.field.set(projection.view); this.serial = this.field.value();
     }
+    return true;
+  }
+  private acceptTyped(latex: string): boolean {
+    const buffer = this.bufferState;
+    if (!buffer || this.disposed || !this.editor.isOpen) { return false; }
+    const { source: value, at } = insertCommandSource(buffer.marked, buffer.marker, latex);
+    if (!this.editor.write(this.arg.index, value, [], 'mathCompletion')) { return false; }
+    const arg = this.editor.argument(this.arg.index);
+    const completed = completedMacroCall(value, buffer.marked.indexOf(buffer.marker), this.host.context().defs);
+    this.acceptedCallFrom = arg && completed ? arg.from + completed.from : undefined;
+    this.bufferState = undefined;
+    this.projection = this.editor.projection(value); this.sourceView = this.projection.view;
+    this.field.setMacros(this.projection.macros);
+    this.field.set(this.sourceView, projectedOffset(this.projection, { ...this.host.span(), wrapper: undefined }, at));
+    this.serial = this.field.value();
+    this.editor.nestedButtons(this.nested, this.arg.index);
     return true;
   }
   dispose() { this.disposed = true; this.field.dispose(); }

@@ -103,6 +103,18 @@ test('unknown commands become chips with their groups', () => {
   assert.equal(islands[0].text, '\\foo{a}[b]');
 });
 
+test('input after an island removes only its generated separator before the next atom', () => {
+  const canon = (source: string) => tokenize(source).filter(t => t.kind !== 'space').reduce((out, token) =>
+    out + (/\\[a-zA-Z]+$/.test(out) && /^[a-zA-Z]/.test(token.value) ? ' ' : '') + token.value, '');
+  for (const gap of ['', ' ']) {
+    const body = `a\\label{eq:n}${gap}b`;
+    const { view, islands } = buildIslands(body, new Map());
+    const before = canon(view), after = before.replace('\\OMTa ', '\\OMTa+q');
+    const result = reconcile(view, before, after, canon, islands);
+    assert.equal(restoreIslands(result.view, islands), `a\\label{eq:n}+q${gap}b`);
+  }
+});
+
 test('never leaves an argument-taking command bare', () => {
   // MathLive accepts \boldsymbol{} and the bare command alike; TeX does not.
   const canon = (s: string) => s.replace(/\s+/g, '').replace(/\\boldsymbol\{\}|\\boldsymbol$/, '\\bm{}');

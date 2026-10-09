@@ -10,11 +10,11 @@ import { Canonicalizer, createField, staticMarkup, unknownCommands, type LiveFie
 import { parseMacroCalls, type MacroCall } from '../../core/macroCalls.ts';
 import { completedMacroCall, isMacroCompletionSource } from '../../core/macroCompletion.ts';
 import { MacroArgEditor } from '../macro/argEditor.ts';
-import { macroContext, project, type MacroContext, type Projection } from '../formula/projection.ts';
+import { insertCommandSource, macroContext, project, projectedOffset, type MacroContext, type Projection } from '../formula/projection.ts';
 import { editKind } from './annotations.ts';
 import type { Change, Patch } from '../../shared/types.ts';
 import type { MathCompletion, MathCompletionTarget } from '../completion/mathCompletion.ts';
-import { sourceCursor } from '../formula/sourcePosition.ts';
+import { sourceCursor, stripCursorSeparator } from '../formula/sourcePosition.ts';
 import { hasMathModeCJK } from '../../core/mathText.ts';
 
 /** Transactions produced by a math field; its own widget must not reload from them. */
@@ -238,6 +238,7 @@ class FormulaSession {
       begin: () => this.beginCompletion(), buffer: prefix => this.buffer(prefix),
       anchor: () => this.field.anchor(), selectedLatex: () => restoreIslands(this.field.selectedLatex(), this.projection.islands),
       accept: (latex, firstPromptId, extras, sourceLatex) => this.acceptCompletion(latex, firstPromptId, extras, sourceLatex),
+      acceptTyped: latex => this.acceptTyped(latex),
       acceptedTarget: () => {
         const from = this.completedCallFrom; this.completedCallFrom = undefined;
         if (active !== this || from === undefined) { return this.completionTarget; }
@@ -274,19 +275,19 @@ class FormulaSession {
     }, { capture: true, signal: this.abort.signal });
   }
 
-  private load() {
+  private load(cursor?: number) {
     this.canon.configure(this.projection.macros);
     this.sourceView = this.projection.view;
-    this.field.set(this.sourceView);
+    this.field.set(this.sourceView, cursor);
     this.serial = this.field.value();
     this.minimalOnly = this.field.hasErrors() || this.canon.canon(this.serial) !== this.serial;
   }
 
   /** The macro context changed. */
-  reproject() {
+  reproject(cursor?: number) {
     this.projection = project(this.span, this.body, context);
     this.field.setMacros(this.projection.macros);
-    this.load();
+    this.load(cursor === undefined ? undefined : projectedOffset(this.projection, this.span, cursor));
     this.renderTools();
   }
 
@@ -472,7 +473,8 @@ class FormulaSession {
     this.canon.configure({ ...this.projection.macros, [marker.slice(1)]: { def: 'x', args: 0, expand: false, captureSelection: true } });
     const marked = this.field.markedValue(marker);
     const result = reconcile(this.sourceView, this.serial, marked, this.canon.canon, this.projection.islands);
-    const markedBody = this.projection.restore(result.view);
+    const restored = this.projection.restore(result.view);
+    const markedBody = restored === undefined ? undefined : stripCursorSeparator(restored, marker, this.body);
     this.canon.configure(this.projection.macros);
     if (result.strategy === 'body' && this.minimalOnly) { this.rejectInput('此公式补全无法安全地保留原始格式，已切换到源码模式。'); return false; }
     if (markedBody === undefined || markedBody.split(marker).length !== 2) { return false; }
@@ -535,6 +537,20 @@ class FormulaSession {
     const next = project(this.span, this.body, context);
     if (next.islands.length !== this.projection.islands.length) { this.reproject(); }
     else { this.renderTools(); }
+    return true;
+  }
+
+  private acceptTyped(latex: string): boolean {
+    const span = this.locate(), buffer = this.bufferState;
+    if (!span || !buffer) { return false; }
+    const { source: body, at } = insertCommandSource(buffer.markedBody, buffer.marker, latex);
+    const patch = diffText(this.body, body);
+    this.body = body; this.bufferState = undefined;
+    // User input owns source even for metadata and unsupported commands. The
+    // renderer's islands protect it through subsequent ordinary visual edits.
+    if (patch) { this.dispatchLocal({ from: span.bodyFrom + patch.from, to: span.bodyFrom + patch.to, insert: patch.insert }, 'mathCompletion'); }
+    this.reproject(at);
+    this.completedCallFrom = completedMacroCall(body, buffer.markedBody.indexOf(buffer.marker), context.defs)?.from;
     return true;
   }
 

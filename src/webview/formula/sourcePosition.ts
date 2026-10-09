@@ -3,6 +3,15 @@ import { reconcile } from '../../core/writeback.ts';
 import type { LiveField } from './mathlive.ts';
 import type { Projection } from './projection.ts';
 
+/** The probe's control-word separator must not become new user whitespace. */
+export function stripCursorSeparator(marked: string, marker: string, source: string): string {
+  const at = marked.indexOf(marker), end = at + marker.length;
+  if (at < 0 || !/^ [A-Za-z]/.test(marked.slice(end))) { return marked; }
+  const change = diffText(source, marked.replace(marker, ''));
+  return change?.from === at && change.insert === ' '
+    ? marked.slice(0, end) + marked.slice(end + 1) : marked;
+}
+
 /** Probe a copy of the field. Neither the active model nor the source is modified. */
 export function sourceCursor(field: LiveField, projection: Projection, sourceView: string, serial: string,
   canon: (projection: Projection, value: string) => string | undefined): number | undefined {

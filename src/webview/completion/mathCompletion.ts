@@ -23,6 +23,8 @@ export interface MathCompletionTarget {
   anchor(): { left: number; top: number; bottom: number };
   selectedLatex(): string;
   accept(latex: string, firstPromptId: string | undefined, extraEdits: Change[], sourceLatex?: string): boolean;
+  /** Typed LaTeX is authoritative even when the renderer does not support it. */
+  acceptTyped(latex: string): boolean;
   /** Acceptance may open a source-owned argument field and transfer input there. */
   acceptedTarget?(): MathCompletionTarget | undefined;
   end(): void;
@@ -184,6 +186,7 @@ export class MathCompletion {
   }
   private commandKeydown(event: KeyboardEvent) {
     if (event.isComposing || this.composing) { return; }
+    if (['Enter', 'Tab', ' '].includes(event.key) && this.command?.text() !== this.prefix) { this.commandInput(); }
     if (event.key !== 'Enter' && event.key !== 'Tab') { this.resolver.cancel(); }
     let handled = true;
     if (event.key === 'Escape') { this.cancel(); }
@@ -195,7 +198,8 @@ export class MathCompletion {
         this.selected = (this.selected + (event.key === 'ArrowDown' ? 1 : -1) + this.listed.length) % this.listed.length;
         this.render();
       }
-    } else if (event.key === 'Enter' && !this.settings?.completionAcceptOnEnter) {
+    } else if (event.key === 'Enter' && !this.listed.length) { this.acceptTyped(); }
+    else if (event.key === 'Enter' && !this.settings?.completionAcceptOnEnter) {
       const target = this.target;
       this.cancel(false);
       if (target) { this.handoff({ kind: 'key', key: {
@@ -221,7 +225,7 @@ export class MathCompletion {
     this.command.restore(); this.command.dispose(); this.command = undefined;
     this.editing = true;
     let ok = false;
-    try { ok = target.accept(latex, undefined, [], latex); } finally { this.editing = false; }
+    try { ok = target.acceptTyped(latex); } finally { this.editing = false; }
     if (!ok) { this.cancel(); return; }
     this.clear(); this.focusTarget(target.acceptedTarget?.() ?? target);
     void this.sync.flush();
